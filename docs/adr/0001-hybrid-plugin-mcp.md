@@ -96,6 +96,8 @@ The server follows these constraints:
 - allowed workspace roots supplied explicitly at startup and enforced after `realpath`
   canonicalization;
 - rejection of path traversal and symlinks that resolve outside an allowed root;
+- separate authorization of discovered Git worktree/Git-directory roots and every derived metadata
+  file before repository-wide inspection or metadata reads;
 - registered workspace/source-count and byte limits, with sensitive metadata, `.git`, and
   `node_modules` source paths excluded;
 - repository content treated as untrusted data, never as instructions to execute;

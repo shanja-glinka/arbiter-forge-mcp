@@ -109,8 +109,11 @@ commands, or claim that detected tooling is usable without host verification.
 
 Git metadata collection clears inherited `GIT_*`, disables global/system config, hooks, fsmonitor,
 external diff/textconv, and repository filters, and hashes untracked content with filters disabled.
-If a content-bound snapshot cannot be produced safely, inspection degrades instead of executing a
-repository helper.
+The discovered worktree root and absolute Git directory are separately canonicalized and must stay
+inside the allowlist before repository-wide commands continue. Derived metadata files such as
+`package.json`, lockfiles, rule files, and harness markers are also realpath-authorized, regular-file
+checked, and size-bounded before reading. If any boundary or content-bound snapshot cannot be proven
+safely, inspection returns `partial` instead of following the path or executing a repository helper.
 
 Its status is `ready`, `partial`, or `denied`. A denied inspection does not disable the pure forge
 and validation tools.

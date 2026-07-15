@@ -4,6 +4,7 @@ import {
   existsSync,
   mkdtempSync,
   mkdirSync,
+  realpathSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -92,6 +93,10 @@ describe("workspace inspection boundary", () => {
     const root = mkdtempSync(join(tmpdir(), "arbiter-forge-sensitive-"));
     const relativePaths = [
       "secrets.json",
+      ".envrc",
+      "secrets.env",
+      "auth.csv",
+      "TOKENS.CSV",
       "tokens.yaml",
       ".aws/credentials",
       ".config/gcloud/application_default_credentials.json",
@@ -123,6 +128,77 @@ describe("workspace inspection boundary", () => {
         error.includes("sensitive or dependency metadata path is denied"),
       ),
     ).toBe(true);
+  });
+
+  it("allows a non-secret documentation filename with an auth prefix", () => {
+    const root = mkdtempSync(join(tmpdir(), "arbiter-forge-safe-auth-doc-"));
+    const source = join(root, "auth-flow.md");
+    writeFileSync(source, "Public authentication architecture.\n");
+    process.env.ARBITER_FORGE_ALLOWED_ROOTS_JSON = JSON.stringify([root]);
+
+    const result = inspectWorkspace({
+      workspaceRoots: [root],
+      sourcePaths: [source],
+    });
+
+    expect(result.status).toBe("ready");
+    expect(result.sources).toHaveLength(1);
+  });
+
+  it("does not inspect a parent Git repository outside a nested allowlist", () => {
+    const outer = mkdtempSync(join(tmpdir(), "arbiter-forge-parent-git-"));
+    const allowedChild = join(outer, "allowed-child");
+    mkdirSync(allowedChild);
+    writeFileSync(join(allowedChild, "tracked.txt"), "tracked\n");
+    runFixtureGit(outer, ["init", "-q"]);
+    runFixtureGit(outer, ["config", "user.email", "audit@example.invalid"]);
+    runFixtureGit(outer, ["config", "user.name", "Audit"]);
+    runFixtureGit(outer, ["add", "allowed-child/tracked.txt"]);
+    runFixtureGit(outer, ["commit", "-q", "-m", "base"]);
+    writeFileSync(join(outer, "outside-untracked.txt"), "outside\n");
+    process.env.ARBITER_FORGE_ALLOWED_ROOTS_JSON = JSON.stringify([
+      allowedChild,
+    ]);
+
+    const result = inspectWorkspace({ workspaceRoots: [allowedChild] });
+
+    expect(result.status).toBe("partial");
+    expect(result.workspaces[0]?.git).toBeNull();
+    expect(result.warnings.join("\n")).toContain(
+      "Git snapshot boundary escapes configured allowed roots",
+    );
+    expect(result.allowedRoots).toEqual([realpathSync(allowedChild)]);
+  });
+
+  it("does not follow workspace metadata symlinks outside the allowlist", () => {
+    const root = mkdtempSync(join(tmpdir(), "arbiter-forge-metadata-root-"));
+    const outside = mkdtempSync(
+      join(tmpdir(), "arbiter-forge-metadata-outside-"),
+    );
+    const outsidePackage = join(outside, "package.json");
+    const outsidePlaywright = join(outside, "playwright.config.ts");
+    writeFileSync(
+      outsidePackage,
+      JSON.stringify({
+        packageManager: "OUTSIDE_SENTINEL@9",
+        scripts: { OUTSIDE_SCRIPT_SENTINEL: "true" },
+      }),
+    );
+    writeFileSync(outsidePlaywright, "export default {};\n");
+    symlinkSync(outsidePackage, join(root, "package.json"));
+    symlinkSync(outsidePlaywright, join(root, "playwright.config.ts"));
+    process.env.ARBITER_FORGE_ALLOWED_ROOTS_JSON = JSON.stringify([root]);
+
+    const result = inspectWorkspace({ workspaceRoots: [root] });
+
+    expect(result.status).toBe("partial");
+    expect(result.workspaces[0]?.packageScripts).toEqual([]);
+    expect(result.workspaces[0]?.detected.packageManager).toBeNull();
+    expect(result.workspaces[0]?.detected.playwright).toBe(false);
+    expect(result.warnings.join("\n")).toContain(
+      "resolved outside configured allowed roots",
+    );
+    expect(JSON.stringify(result)).not.toContain("OUTSIDE_SENTINEL");
   });
 
   it("neutralizes Git helpers and filters while retaining a content-bound snapshot", () => {

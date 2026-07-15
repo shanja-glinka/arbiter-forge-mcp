@@ -51,6 +51,7 @@ export interface InspectWorkspaceResult {
 
 const DENIED_BASENAMES = new Set([
   ".env",
+  ".envrc",
   ".git-credentials",
   ".gitconfig",
   ".npmrc",
@@ -85,6 +86,7 @@ const DENIED_PATH_SEGMENTS = new Set([
   ".aws",
   ".azure",
   ".docker",
+  ".direnv",
   ".git",
   ".gnupg",
   ".kube",
@@ -100,10 +102,13 @@ const SENSITIVE_DATA_EXTENSIONS = new Set([
   ".config",
   ".cred",
   ".credentials",
+  ".csv",
+  ".env",
   ".ini",
   ".json",
   ".properties",
   ".toml",
+  ".tsv",
   ".txt",
   ".xml",
   ".yaml",
@@ -171,7 +176,9 @@ export function inspectWorkspace(rawInput: unknown): InspectWorkspaceResult {
   for (const requestedRoot of [...input.workspaceRoots].sort()) {
     try {
       const realRoot = authorizePath(requestedRoot, allowedRoots, true);
-      workspaces.push(inspectOneWorkspace(requestedRoot, realRoot, warnings));
+      workspaces.push(
+        inspectOneWorkspace(requestedRoot, realRoot, allowedRoots, warnings),
+      );
     } catch (error) {
       errors.push(formatError(`workspace root ${requestedRoot}`, error));
     }
@@ -203,7 +210,7 @@ export function inspectWorkspace(rawInput: unknown): InspectWorkspaceResult {
   }
 
   const status =
-    errors.length === 0
+    errors.length === 0 && warnings.length === 0
       ? "ready"
       : workspaces.length > 0 || sources.length > 0
         ? "partial"
@@ -214,10 +221,11 @@ export function inspectWorkspace(rawInput: unknown): InspectWorkspaceResult {
 function inspectOneWorkspace(
   requestedRoot: string,
   realRoot: string,
+  allowedRoots: string[],
   warnings: string[],
 ): WorkspaceInspection {
   const packageJsonPath = join(realRoot, "package.json");
-  const packageJson = readJson(packageJsonPath, warnings);
+  const packageJson = readJson(packageJsonPath, allowedRoots, warnings);
   const packageScripts =
     packageJson &&
     typeof packageJson.scripts === "object" &&
@@ -227,30 +235,43 @@ function inspectOneWorkspace(
   const packageManager =
     packageJson && typeof packageJson.packageManager === "string"
       ? packageJson.packageManager
-      : detectPackageManager(realRoot);
+      : detectPackageManager(realRoot, allowedRoots, warnings);
 
   return {
     requestedRoot,
     realRoot,
-    git: inspectGit(realRoot, warnings),
-    rules: existingPaths(realRoot, KNOWN_RULE_PATHS),
-    planning: existingPaths(realRoot, KNOWN_PLANNING_PATHS),
+    git: inspectGit(realRoot, allowedRoots, warnings),
+    rules: existingPaths(realRoot, KNOWN_RULE_PATHS, allowedRoots, warnings),
+    planning: existingPaths(
+      realRoot,
+      KNOWN_PLANNING_PATHS,
+      allowedRoots,
+      warnings,
+    ),
     detected: {
       packageManager,
       monorepo:
-        exists(join(realRoot, "pnpm-workspace.yaml")) ||
-        exists(join(realRoot, "lerna.json")) ||
+        hasMetadataFile(
+          join(realRoot, "pnpm-workspace.yaml"),
+          allowedRoots,
+          warnings,
+        ) ||
+        hasMetadataFile(join(realRoot, "lerna.json"), allowedRoots, warnings) ||
         Boolean(
           packageJson &&
           ("workspaces" in packageJson || "packages" in packageJson),
         ),
       playwright:
-        PLAYWRIGHT_CONFIGS.some((path) => exists(join(realRoot, path))) ||
+        PLAYWRIGHT_CONFIGS.some((path) =>
+          hasMetadataFile(join(realRoot, path), allowedRoots, warnings),
+        ) ||
         packageScripts.some((script) =>
           script.toLowerCase().includes("playwright"),
         ),
       graphql:
-        GRAPHQL_MARKERS.some((path) => exists(join(realRoot, path))) ||
+        GRAPHQL_MARKERS.some((path) =>
+          hasMetadataFile(join(realRoot, path), allowedRoots, warnings),
+        ) ||
         packageScripts.some((script) =>
           /graphql|codegen|supergraph/iu.test(script),
         ),
@@ -259,9 +280,36 @@ function inspectOneWorkspace(
   };
 }
 
-function inspectGit(root: string, warnings: string[]): GitSnapshot | null {
+function inspectGit(
+  root: string,
+  allowedRoots: string[],
+  warnings: string[],
+): GitSnapshot | null {
   const gitRoot = runGit(root, ["rev-parse", "--show-toplevel"]);
   if (!gitRoot.ok) {
+    return null;
+  }
+  const gitDirectory = runGit(root, ["rev-parse", "--absolute-git-dir"]);
+  try {
+    const realGitRoot = realpathSync(gitRoot.stdout);
+    const realGitDirectory = gitDirectory.ok
+      ? realpathSync(gitDirectory.stdout)
+      : null;
+    if (
+      !isAuthorized(realGitRoot, allowedRoots) ||
+      !realGitDirectory ||
+      !isAuthorized(realGitDirectory, allowedRoots)
+    ) {
+      warnings.push(
+        `Git snapshot boundary escapes configured allowed roots for ${root}; snapshot inspection was skipped.`,
+      );
+      return null;
+    }
+    gitRoot.stdout = realGitRoot;
+  } catch {
+    warnings.push(
+      `Git root identity could not be canonicalized for ${root}; snapshot inspection was skipped.`,
+    );
     return null;
   }
 
@@ -489,8 +537,7 @@ function authorizePath(
     throw new Error("path must be absolute");
   }
   const realPath = realpathSync(resolve(requestedPath));
-  const authorized = allowedRoots.some((root) => isWithin(realPath, root));
-  if (!authorized) {
+  if (!isAuthorized(realPath, allowedRoots)) {
     throw new Error("path is outside configured allowed roots");
   }
   const stat = statSync(realPath);
@@ -498,6 +545,10 @@ function authorizePath(
     throw new Error("path is not a directory");
   }
   return realPath;
+}
+
+function isAuthorized(candidate: string, allowedRoots: string[]): boolean {
+  return allowedRoots.some((root) => isWithin(candidate, root));
 }
 
 function isWithin(candidate: string, root: string): boolean {
@@ -519,7 +570,10 @@ function assertSafeSource(path: string): void {
   );
   if (
     DENIED_BASENAMES.has(name) ||
+    name.startsWith(".envrc") ||
     name.startsWith(".env.") ||
+    name.endsWith(".env") ||
+    name.endsWith(".envrc") ||
     /\.(?:der|jks|key|keystore|p12|pfx|pem|pkcs12)$/iu.test(name) ||
     /^id_(?:dsa|ecdsa|ed25519|rsa)(?:\.pub)?$/iu.test(name) ||
     (SENSITIVE_DATA_EXTENSIONS.has(extension) &&
@@ -534,41 +588,95 @@ function assertSafeSource(path: string): void {
 function existingPaths(
   root: string,
   relativePaths: readonly string[],
+  allowedRoots: string[],
+  warnings: string[],
 ): string[] {
-  return relativePaths.filter((path) => exists(join(root, path)));
+  return relativePaths.filter((path) =>
+    hasMetadataFile(join(root, path), allowedRoots, warnings),
+  );
 }
 
-function exists(path: string): boolean {
+function hasMetadataFile(
+  path: string,
+  allowedRoots: string[],
+  warnings: string[],
+): boolean {
+  return authorizeMetadataFile(path, allowedRoots, warnings) !== null;
+}
+
+function authorizeMetadataFile(
+  path: string,
+  allowedRoots: string[],
+  warnings: string[],
+): string | null {
   try {
-    statSync(path);
-    return true;
-  } catch {
-    return false;
+    const realPath = realpathSync(path);
+    if (!isAuthorized(realPath, allowedRoots)) {
+      throw new Error("resolved outside configured allowed roots");
+    }
+    const stat = statSync(realPath);
+    if (!stat.isFile()) {
+      throw new Error("is not a regular file");
+    }
+    if (stat.size > 1_048_576) {
+      throw new Error("exceeds the 1048576-byte metadata limit");
+    }
+    return realPath;
+  } catch (error) {
+    if (isMissingPathError(error)) {
+      return null;
+    }
+    warnings.push(formatError(`metadata ${path}`, error));
+    return null;
   }
 }
 
 function readJson(
   path: string,
+  allowedRoots: string[],
   warnings: string[],
 ): Record<string, unknown> | null {
-  if (!exists(path)) {
+  const realPath = authorizeMetadataFile(path, allowedRoots, warnings);
+  if (!realPath) {
     return null;
   }
   try {
-    return JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+    return JSON.parse(readFileSync(realPath, "utf8")) as Record<
+      string,
+      unknown
+    >;
   } catch {
     warnings.push(`Unable to parse metadata JSON: ${path}`);
     return null;
   }
 }
 
-function detectPackageManager(root: string): string | null {
-  if (exists(join(root, "pnpm-lock.yaml"))) return "pnpm";
-  if (exists(join(root, "yarn.lock"))) return "yarn";
-  if (exists(join(root, "package-lock.json"))) return "npm";
-  if (exists(join(root, "bun.lock")) || exists(join(root, "bun.lockb")))
+function detectPackageManager(
+  root: string,
+  allowedRoots: string[],
+  warnings: string[],
+): string | null {
+  if (hasMetadataFile(join(root, "pnpm-lock.yaml"), allowedRoots, warnings))
+    return "pnpm";
+  if (hasMetadataFile(join(root, "yarn.lock"), allowedRoots, warnings))
+    return "yarn";
+  if (hasMetadataFile(join(root, "package-lock.json"), allowedRoots, warnings))
+    return "npm";
+  if (
+    hasMetadataFile(join(root, "bun.lock"), allowedRoots, warnings) ||
+    hasMetadataFile(join(root, "bun.lockb"), allowedRoots, warnings)
+  )
     return "bun";
   return null;
+}
+
+function isMissingPathError(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error as { code?: unknown }).code === "ENOENT"
+  );
 }
 
 function finalize(
