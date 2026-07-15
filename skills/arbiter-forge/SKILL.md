@@ -31,17 +31,23 @@ Use the exposed Arbiter Forge operations in this order:
    - Pass the objective, repositories with any inspected `contextHash`, applicable sources and
      requirements, risk signals, requested output mode, explicit goal preference, and capabilities
      that were probed outside `inspect_workspace`.
+   - For documentation synthesis, explicitly choose `greenfield` or `current_aware` discovery before
+     forging. Future-facing does not imply greenfield; current-aware work requires implementation
+     evidence and `existing`/`planned`/`decision_required` dispositions.
+   - For documentation or blind partitions, validate source kinds and physical identity as well as
+     IDs. For a path source, copy the inspected canonical `realPath` and its content or complete
+     manifest `sha256`; an aliased path or identical identity across isolated roles is overlap, not
+     isolation. Every supplied source belongs to exactly one compatible partition or allowlist.
    - Select the least expensive profile that preserves independence. Do not add lanes merely
      because many files exist.
 3. **Validate** with `validate_task`.
-   - Pass `prompt`, `operation`, the Forge decision's `riskProfile`, the requested `riskSignals` and
-     `goalMode`, and whether strict blind checking was requested. Pass `expectedPromptSha256` when
-     validating an unmodified Forge prompt.
-   - Use it to check prompt hashing, placeholders, goal semantics, required arbiter/correction and
-     artifact gates, applicable audit topology, UI/GraphQL proof terms, and strict blind protocol.
-   - Re-forge from validation diagnostics. If text is edited, validate the edited prompt again and
-     do not reuse the old expected hash. When Forge emits a package, `validate_task` validates its
-     prompt text, not every companion file.
+   - Pass the exact Forge `prompt`, `operation`, original typed `request`, and
+     `expectedPromptSha256` from the forge result.
+   - PASS requires that request to recompile to `ready` and the prompt to match the deterministic
+     recompile byte for byte. The result binds the prompt to `requestFingerprint` and `policyHash`.
+   - A manually edited prompt receives only `structural_only` diagnostics and cannot PASS. Express
+     the desired change in the typed request and re-forge. When Forge emits a package,
+     `validate_task` validates its prompt text, not every companion file.
 
 Use the exact schemas exposed by the `arbiter-forge` MCP server. If an operation is unavailable,
 report the missing capability instead of claiming it ran. A manual prompt may be returned only as

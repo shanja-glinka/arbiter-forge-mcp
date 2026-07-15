@@ -1,4 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
+import { isAbsolute } from "node:path";
 import { z } from "zod/v4";
 
 import { inspectWorkspace } from "./core/inspect.js";
@@ -8,16 +10,20 @@ import {
   compileDocumentationTask,
   compileImplementationTask,
 } from "./core/render.js";
+import { revalidateTaskPrompt } from "./core/revalidate.js";
 import {
+  blindCheckForgeResultSchema,
   blindCheckRequestSchema,
+  documentationForgeResultSchema,
   documentationRequestSchema,
-  forgeResultSchema,
   GENERATOR_VERSION,
+  implementationForgeResultSchema,
   implementationRequestSchema,
   inspectWorkspaceRequestSchema,
+  inspectWorkspaceResultSchema,
+  promptValidationResultSchema,
   validateTaskRequestSchema,
 } from "./core/schemas.js";
-import { validateTaskPrompt } from "./core/validate.js";
 
 const READ_ONLY_ANNOTATIONS = {
   readOnlyHint: true,
@@ -41,7 +47,8 @@ export function createServer(): McpServer {
       title: "Inspect workspace for task forging",
       description:
         "Read-only, allowlisted preflight that returns Git snapshot metadata, project rules, harness signals, source hashes, and a context fingerprint. It never returns source contents.",
-      inputSchema: inspectWorkspaceRequestSchema.shape,
+      inputSchema: inspectWorkspaceRequestSchema,
+      outputSchema: inspectWorkspaceResultSchema,
       annotations: READ_ONLY_ANNOTATIONS,
     },
     async (input) => {
@@ -49,7 +56,6 @@ export function createServer(): McpServer {
       return {
         structuredContent: result as unknown as Record<string, unknown>,
         content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
-        isError: result.status === "denied",
       };
     },
   );
@@ -60,8 +66,8 @@ export function createServer(): McpServer {
       title: "Forge implementation arbiter task",
       description:
         "Compile a deterministic, self-contained implementation prompt with adaptive risk, ownership, independent audits, UI/GraphQL proof when applicable, correction loops, and hard terminal gates.",
-      inputSchema: implementationRequestSchema.shape,
-      outputSchema: forgeResultSchema.shape,
+      inputSchema: implementationRequestSchema,
+      outputSchema: implementationForgeResultSchema,
       annotations: READ_ONLY_ANNOTATIONS,
     },
     async (input) =>
@@ -76,8 +82,8 @@ export function createServer(): McpServer {
       title: "Forge documentation synthesis task",
       description:
         "Compile an independent intent/code/governance discovery workflow that creates as-is, to-be, or mixed documentation plus optional implementation task deliverables.",
-      inputSchema: documentationRequestSchema.shape,
-      outputSchema: forgeResultSchema.shape,
+      inputSchema: documentationRequestSchema,
+      outputSchema: documentationForgeResultSchema,
       annotations: READ_ONLY_ANNOTATIONS,
     },
     async (input) =>
@@ -92,8 +98,8 @@ export function createServer(): McpServer {
       title: "Forge strict documentation blind check",
       description:
         "Compile an isolated D1/D2/D3 documentation-versus-code audit with allowlists, manifests, normalized comparison, forbidden-extra detection, and honest degradation when isolation cannot be proven.",
-      inputSchema: blindCheckRequestSchema.shape,
-      outputSchema: forgeResultSchema.shape,
+      inputSchema: blindCheckRequestSchema,
+      outputSchema: blindCheckForgeResultSchema,
       annotations: READ_ONLY_ANNOTATIONS,
     },
     async (input) =>
@@ -107,16 +113,18 @@ export function createServer(): McpServer {
     {
       title: "Validate an Arbiter Forge task prompt",
       description:
-        "Validate generated or human-edited task text for goal semantics, unresolved placeholders, applicable audit topology, UI/GraphQL proof, strict blind-check isolation, artifact policy, and terminal PASS honesty.",
-      inputSchema: validateTaskRequestSchema.shape,
+        "Recompile the original typed forge request and grant PASS only to a ready, byte-identical generated prompt. Edited text receives structural-only diagnostics.",
+      inputSchema: validateTaskRequestSchema,
+      outputSchema: promptValidationResultSchema,
       annotations: READ_ONLY_ANNOTATIONS,
     },
     async (input) => {
-      const result = validateTaskPrompt(validateTaskRequestSchema.parse(input));
+      const result = revalidateTaskPrompt(
+        validateTaskRequestSchema.parse(input),
+      );
       return {
         structuredContent: result as unknown as Record<string, unknown>,
         content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
-        isError: !result.pass,
       };
     },
   );
@@ -130,9 +138,13 @@ function forgeToolResult(result: ReturnType<typeof compileImplementationTask>) {
   return {
     structuredContent: result,
     content: [{ type: "text" as const, text: result.prompt.text }],
-    isError: result.status === "invalid",
   };
 }
+
+const absolutePathPromptArgument = z
+  .string()
+  .min(1)
+  .refine((value) => isAbsolute(value.trim()), "must be an absolute path");
 
 function registerPrompts(server: McpServer): void {
   server.registerPrompt(
@@ -142,9 +154,15 @@ function registerPrompts(server: McpServer): void {
       description:
         "Create a ready hard-arbiter implementation prompt from a concise objective.",
       argsSchema: {
-        objective: z.string().min(1),
-        riskSignals: z.string().optional(),
-        persistentGoal: z.enum(["no", "yes"]).default("no"),
+        objective: z.string().min(1).describe("Outcome to implement."),
+        riskSignals: z
+          .string()
+          .optional()
+          .describe("Optional comma-separated typed risk signals."),
+        persistentGoal: z
+          .enum(["no", "yes"])
+          .optional()
+          .describe("Request host goal lifecycle; defaults to no."),
       },
     },
     ({ objective, riskSignals, persistentGoal }) => {
@@ -157,7 +175,10 @@ function registerPrompts(server: McpServer): void {
       );
       return {
         messages: [
-          { role: "user", content: { type: "text", text: result.prompt.text } },
+          {
+            role: "user",
+            content: { type: "text", text: requireReadyPrompt(result) },
+          },
         ],
       };
     },
@@ -170,16 +191,71 @@ function registerPrompts(server: McpServer): void {
       description:
         "Create an independent documentation discovery and authoring prompt.",
       argsSchema: {
-        objective: z.string().min(1),
-        targetState: z.enum(["as_is", "to_be", "mixed"]),
-        outputPath: z.string().min(1),
+        objective: z.string().min(1).describe("Documentation outcome."),
+        targetState: z
+          .enum(["as_is", "to_be", "mixed"])
+          .describe(
+            "Relationship of the requested document to target behavior.",
+          ),
+        documentationBasis: z
+          .enum(["current_aware", "greenfield"])
+          .describe("Explicit current-aware or greenfield discovery basis."),
+        outputPath: z.string().min(1).describe("Target documentation path."),
+        implementationPath: absolutePathPromptArgument
+          .optional()
+          .describe("Current implementation locator for current-aware work."),
+        implementationRealPath: absolutePathPromptArgument
+          .optional()
+          .describe("Canonical real path from inspection or manifest."),
+        implementationSha256: z
+          .string()
+          .regex(/^[a-f0-9]{64}$/u)
+          .optional()
+          .describe("Content or complete manifest SHA-256."),
       },
     },
-    ({ objective, targetState, outputPath }) => {
+    ({
+      objective,
+      targetState,
+      documentationBasis,
+      outputPath,
+      implementationPath,
+      implementationRealPath,
+      implementationSha256,
+    }) => {
+      if (documentationBasis === "greenfield" && targetState !== "to_be") {
+        throw new Error(
+          "greenfield documentationBasis is valid only for targetState=to_be",
+        );
+      }
+      if (
+        documentationBasis === "current_aware" &&
+        (!implementationPath ||
+          !implementationRealPath ||
+          !implementationSha256)
+      ) {
+        throw new Error(
+          "implementationPath, implementationRealPath, and implementationSha256 are required for current_aware documentation prompts; use the typed tool for a richer source manifest",
+        );
+      }
+      const implementationSources = implementationPath
+        ? [
+            {
+              id: "implementation",
+              kind: "implementation" as const,
+              path: implementationPath,
+              realPath: implementationRealPath,
+              sha256: implementationSha256,
+              authority: "context" as const,
+              required: true,
+            },
+          ]
+        : [];
       const result = compileDocumentationTask(
         documentationRequestSchema.parse({
           objective,
           targetState,
+          documentationBasis,
           sources: [
             {
               id: "user-intent",
@@ -188,20 +264,26 @@ function registerPrompts(server: McpServer): void {
               authority: "canonical",
               required: true,
             },
+            ...implementationSources,
           ],
           deliverables: [
             { id: "documentation", kind: "behavior_spec", outputPath },
           ],
           discoveryPartitions: {
             intentSourceIds: ["user-intent"],
-            implementationSourceIds: [],
+            implementationSourceIds: implementationSources.map(
+              (source) => source.id,
+            ),
             governanceSourceIds: [],
           },
         }),
       );
       return {
         messages: [
-          { role: "user", content: { type: "text", text: result.prompt.text } },
+          {
+            role: "user",
+            content: { type: "text", text: requireReadyPrompt(result) },
+          },
         ],
       };
     },
@@ -214,12 +296,32 @@ function registerPrompts(server: McpServer): void {
       description:
         "Create a strict D1/D2/D3 comparison prompt from explicit source paths.",
       argsSchema: {
-        objective: z.string().min(1),
-        documentationPath: z.string().min(1),
-        implementationPath: z.string().min(1),
+        objective: z.string().min(1).describe("Comparison objective."),
+        documentationPath: absolutePathPromptArgument.describe(
+          "Documentation locator.",
+        ),
+        documentationRealPath: absolutePathPromptArgument.describe(
+          "Canonical documentation real path.",
+        ),
+        documentationSha256: z.string().regex(/^[a-f0-9]{64}$/u),
+        implementationPath: absolutePathPromptArgument.describe(
+          "Implementation locator.",
+        ),
+        implementationRealPath: absolutePathPromptArgument.describe(
+          "Canonical implementation real path.",
+        ),
+        implementationSha256: z.string().regex(/^[a-f0-9]{64}$/u),
       },
     },
-    ({ objective, documentationPath, implementationPath }) => {
+    ({
+      objective,
+      documentationPath,
+      documentationRealPath,
+      documentationSha256,
+      implementationPath,
+      implementationRealPath,
+      implementationSha256,
+    }) => {
       const result = compileBlindCheckTask(
         blindCheckRequestSchema.parse({
           objective,
@@ -228,6 +330,8 @@ function registerPrompts(server: McpServer): void {
               id: "documentation",
               kind: "canonical_documentation",
               path: documentationPath,
+              realPath: documentationRealPath,
+              sha256: documentationSha256,
               authority: "canonical",
               required: true,
             },
@@ -235,6 +339,8 @@ function registerPrompts(server: McpServer): void {
               id: "implementation",
               kind: "implementation",
               path: implementationPath,
+              realPath: implementationRealPath,
+              sha256: implementationSha256,
               authority: "context",
               required: true,
             },
@@ -246,11 +352,31 @@ function registerPrompts(server: McpServer): void {
       );
       return {
         messages: [
-          { role: "user", content: { type: "text", text: result.prompt.text } },
+          {
+            role: "user",
+            content: { type: "text", text: requireReadyPrompt(result) },
+          },
         ],
       };
     },
   );
+}
+
+function requireReadyPrompt(
+  result: ReturnType<typeof compileImplementationTask>,
+): string {
+  if (result.status !== "ready") {
+    const details = [
+      ...result.validation.blockingErrors,
+      ...result.validation.missingMaterialInputs,
+      ...result.questions.map((question) => question.question),
+    ];
+    throw new McpError(
+      ErrorCode.InvalidParams,
+      `Arbiter Forge prompt is ${result.status}: ${details.join("; ")}`,
+    );
+  }
+  return result.prompt.text;
 }
 
 function registerResources(server: McpServer): void {

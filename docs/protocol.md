@@ -30,16 +30,16 @@ Forge inputs share these concepts:
 
 - `objective` and optional `nonGoals`;
 - zero or more repository references, optionally bound to `inspect_workspace` `contextHash` values;
-- source entries with an ID, kind, authority, requiredness, and optional path, inline content, or
-  SHA-256;
+- source entries with a stable ID, kind, authority, requiredness, and either inline content or an
+  absolute path; isolated path sources also carry the inspected canonical `realPath` and content or
+  complete-manifest SHA-256;
 - operation-specific requirements, ownership constraints, discovery partitions, deliverables, and
   comparison dimensions;
 - typed risk signals rather than keyword-only classification;
 - host capabilities such as clean-context delegation, model selection, goal tools, and browser
   tooling;
 - `outputMode`: `prompt_only` by default or `resumable_package` when explicitly justified;
-- `goalMode`: `plain` by default or `persistent_requested` when a host goal launch line is
-  authorized;
+- `goalMode`: `plain` by default or `persistent_requested` when host goal lifecycle is authorized;
 - `modelRouting`: `adaptive` by default or `omit`.
 
 Forge responses use a common envelope:
@@ -107,6 +107,11 @@ The tool resolves every path against startup-configured allowed roots and return
 It does not recursively return arbitrary repository content, read secret-bearing paths, run project
 commands, or claim that detected tooling is usable without host verification.
 
+Git metadata collection clears inherited `GIT_*`, disables global/system config, hooks, fsmonitor,
+external diff/textconv, and repository filters, and hashes untracked content with filters disabled.
+If a content-bound snapshot cannot be produced safely, inspection degrades instead of executing a
+repository helper.
+
 Its status is `ready`, `partial`, or `denied`. A denied inspection does not disable the pure forge
 and validation tools.
 
@@ -121,14 +126,21 @@ is in scope. A missing required harness becomes an explicit setup lane or capabi
 fictional Playwright PASS.
 
 The task may express model capability preferences, but it must include an inherited-model fallback
-when the host cannot select a worker model. It includes `/goal` only for
-`goalMode: "persistent_requested"`; the default `plain` mode forbids `/goal`. The MCP server never
-creates or updates a goal itself.
+when the host cannot select a worker model. `goalMode: "persistent_requested"` emits instructions to
+call `get_goal`, reuse a compatible goal, conditionally call `create_goal`, stop on an incompatible
+unfinished goal, and recheck at fan-in. It never pre-emits `/goal` before state inspection. The MCP
+server never creates or updates a goal itself.
 
 ## `forge_documentation_task`
 
 Purpose: create or revise canonical documentation and task specifications without copying either
 intent or current code uncritically.
+
+Every request explicitly selects a documentation basis:
+
+- `current_aware` requires implementation discovery and a post-draft blind check;
+- `greenfield` is valid only for `to_be`, forbids implementation-baseline claims, and permits only
+  `planned` or `decision_required` dispositions.
 
 Required source partitions:
 
@@ -136,10 +148,11 @@ Required source partitions:
 - implementation/schema/test evidence for an observed-spec analyst;
 - target documentation paths and their conventions.
 
-The generated workflow requires independent expected and observed reports, a comparator that sees
-only normalized reports, and a root-arbiter disposition for every mismatch. The approved
-disposition, not raw worker conclusions, is the writer's specification. For a `mixed` target state,
-every normalized claim is labelled `existing`, `planned`, or `decision_required`; unresolved
+The generated workflow requires independent expected and observed reports for current-aware work, a
+full-outer comparator that sees only normalized reports, and a root-arbiter disposition for every
+mismatch and implementation-only behavior. Every supplied source belongs to exactly one compatible
+partition. The approved disposition, not raw worker conclusions, is the writer's specification.
+Every normalized claim is labelled `existing`, `planned`, or `decision_required`; unresolved
 product or ownership choices remain `decision_required`.
 
 After writing, the task performs a fresh documentation-versus-implementation verification on the
@@ -154,10 +167,14 @@ The generated task enforces:
 
 1. D1 reads only canonical documentation and reconstructs expected behavior.
 2. D2 reads only implementation, schema, migrations, tests, and allowlisted runtime evidence.
-3. D3 receives only normalized D1/D2 reports and classifies each mapping as `match`,
+3. D3 receives only normalized D1/D2 reports, performs the full outer union, and classifies each
+   mapping as `match`,
    `missing_in_implementation`, `extra_or_forbidden_behavior`, `semantic_mismatch`,
    `ownership_mismatch`, `unverifiable`, or `open_decision`.
-4. The root arbiter verifies material references and routes correction; it does not decide by vote.
+4. Every D2-only key is first `extra_or_forbidden_behavior`; a separate disposition records whether
+   it is allowed, forbidden, or decision-required. Exact D1/D2 count/hash coverage and zero
+   undispositioned D2 keys are terminal gates.
+5. The root arbiter verifies material references and routes correction; it does not decide by vote.
 
 All participants bind their reports to source and repository snapshot hashes. If fresh isolated
 contexts and actual input manifests cannot be proven, the generated task labels the procedure an
@@ -165,25 +182,29 @@ independent review instead of a blind check.
 
 ## `validate_task`
 
-Purpose: validate generated or manually edited prompt text without executing it.
+Purpose: bind generated prompt text to a ready deterministic recompile without executing it; edited
+text receives diagnostics but is never PASS-eligible.
 
 The exact request contains:
 
 - `prompt`;
 - `operation`: `implementation_task`, `documentation_task`, or `blind_check_task`;
-- `riskProfile` and `riskSignals`;
-- `goalMode`;
-- `strictBlindRequested`;
-- optional `expectedPromptSha256`.
+- `request`: the original typed input for that forge operation;
+- required `expectedPromptSha256` from the forge result.
 
-The result contains `pass`, `promptSha256`, `unresolvedPlaceholders`, `blockingErrors`, and
-`warnings`. Errors and warnings are strings; v1 does not claim stable finding codes, locations, or
-severity objects.
+The tool recompiles `request` with the current policies. PASS requires a `ready` forge status, an
+expected hash equal to the recompile, and byte-identical prompt text. Caller-rehashing an edited
+prompt cannot create provenance. A manual edit returns `assurance: "structural_only"`; callers must
+express the change in the typed request and re-forge.
+
+The result contains `pass`, `assurance`, actual and expected prompt hashes, `requestFingerprint`,
+`policyHash`, `forgeStatus`, unresolved placeholders, blocking errors, and warnings. Errors and
+warnings are strings; v1 does not claim stable finding codes, locations, or severity objects.
 
 Validation covers at least:
 
-- unresolved placeholders and an optional expected-prompt hash mismatch;
-- `/goal` without explicit authorization;
+- deterministic request/policy recompile, ready state, byte identity, and expected-prompt hash;
+- a pre-emitted `/goal` command before goal preflight;
 - required hard-arbiter, snapshot freshness, artifact isolation, and correction-loop language;
 - testing/conventions gates for Standard and Critical implementation tasks;
 - physical isolation and blocking-requirement semantics for Critical implementation tasks;
@@ -192,9 +213,10 @@ Validation covers at least:
 - strict blind-check isolation and D1/D2/D3 boundaries;
 - prompt text that equates a non-pass state with `PASS`.
 
-`validate_task` is also invoked internally by every `forge_*` tool. A blocking validation finding
-makes `pass` false; an internally generated forge result then has status `invalid`. The MCP tool
-marks a failed standalone validation as an MCP error result.
+Structural validation is also invoked internally by every `forge_*` tool. A blocking validation
+finding makes the generated forge result `invalid`. `denied`, `invalid`, `needs_input`, and
+`pass:false` are schema-defined domain outcomes, not MCP execution failures, so they retain normal
+structured output validation.
 
 ## Safety Rules
 

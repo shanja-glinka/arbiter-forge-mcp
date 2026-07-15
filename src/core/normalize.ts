@@ -1,5 +1,11 @@
 import { sha256, canonicalJson, uniqueSorted } from "./stable.js";
-import { isAbsolute, normalize, sep } from "node:path";
+import {
+  isAbsolute,
+  normalize as normalizePath,
+  relative,
+  resolve,
+  sep,
+} from "node:path";
 import type {
   BlindCheckRequest,
   DocumentationRequest,
@@ -30,23 +36,26 @@ export function normalizeRequest(
   const missingMaterialInputs: string[] = [];
   const warnings: string[] = [];
 
-  validateUniqueIds(request.repositories, "repository", blockingErrors);
-  validateUniqueIds(request.sources, "source", blockingErrors);
-
   for (const repository of request.repositories) {
-    if (!isAbsolute(repository.root)) {
+    if (!isAbsolute(repository.root.trim())) {
       blockingErrors.push(`repository ${repository.id} root must be absolute`);
     }
   }
   for (const source of request.sources) {
-    if (source.path && !isAbsolute(source.path)) {
+    if (source.path && !isAbsolute(source.path.trim())) {
       blockingErrors.push(`source ${source.id} path must be absolute`);
+    }
+    if (source.realPath && !isAbsolute(source.realPath.trim())) {
+      blockingErrors.push(`source ${source.id} realPath must be absolute`);
+    }
+    if (source.realPath && !source.path) {
+      blockingErrors.push(`source ${source.id} realPath requires path`);
     }
   }
   if (request.artifactRoot) {
-    if (!isAbsolute(request.artifactRoot)) {
+    if (!isAbsolute(request.artifactRoot.trim())) {
       blockingErrors.push("artifactRoot must be absolute");
-    } else if (!isWithinTmp(request.artifactRoot)) {
+    } else if (!isWithinTmp(request.artifactRoot.trim())) {
       blockingErrors.push(
         "repository-local artifactRoot is unsupported without an ignored-path proof; use /tmp for forge v1",
       );
@@ -65,40 +74,85 @@ export function normalizeRequest(
         left.id.localeCompare(right.id, "en"),
     );
 
+  validateUniqueIds(repositories, "repository", blockingErrors);
+  validateUniqueIds(sources, "source", blockingErrors);
+
   const base = {
     ...request,
+    objective: request.objective.replace(/\r\n?/gu, "\n").trim(),
+    ...(request.title ? { title: request.title.trim() } : {}),
     repositories,
     sources,
     nonGoals: uniqueSorted(request.nonGoals.map((value) => value.trim())),
+    ...(request.context?.trim()
+      ? { context: request.context.replace(/\r\n?/gu, "\n").trim() }
+      : {}),
+    ...(request.artifactRoot
+      ? { artifactRoot: normalizePath(request.artifactRoot.trim()) }
+      : {}),
     riskSignals: uniqueSorted(
       request.riskSignals,
     ) as typeof request.riskSignals,
   } as ForgeRequest;
 
   if ("requirements" in base) {
-    validateUniqueIds(base.requirements, "requirement", blockingErrors);
     base.requirements = normalizeRequirements(base.requirements);
+    validateUniqueIds(base.requirements, "requirement", blockingErrors);
     base.ownershipRules = uniqueSorted(
       base.ownershipRules.map((value) => value.trim()),
     );
   }
 
   if ("deliverables" in base) {
+    base.deliverables = base.deliverables
+      .map((deliverable) => ({
+        ...deliverable,
+        id: normalizeId(deliverable.id),
+        outputPath: deliverable.outputPath.trim(),
+        ...(deliverable.owner ? { owner: deliverable.owner.trim() } : {}),
+      }))
+      .sort((left, right) => left.id.localeCompare(right.id, "en"));
     validateUniqueIds(base.deliverables, "deliverable", blockingErrors);
-    base.deliverables = [...base.deliverables].sort((left, right) =>
-      left.id.localeCompare(right.id, "en"),
-    );
+    base.discoveryPartitions = {
+      intentSourceIds: normalizeIdList(
+        base.discoveryPartitions.intentSourceIds,
+        "intent partition source",
+        blockingErrors,
+      ),
+      implementationSourceIds: normalizeIdList(
+        base.discoveryPartitions.implementationSourceIds,
+        "implementation partition source",
+        blockingErrors,
+      ),
+      governanceSourceIds: normalizeIdList(
+        base.discoveryPartitions.governanceSourceIds,
+        "governance partition source",
+        blockingErrors,
+      ),
+    };
     validatePartitionIds(base, blockingErrors, missingMaterialInputs);
   }
 
   if ("documentationSourceIds" in base) {
-    base.documentationSourceIds = uniqueSorted(base.documentationSourceIds);
-    base.implementationSourceIds = uniqueSorted(base.implementationSourceIds);
-    base.canonicalRequirementIds = uniqueSorted(base.canonicalRequirementIds);
+    base.documentationSourceIds = normalizeIdList(
+      base.documentationSourceIds,
+      "D1 source",
+      blockingErrors,
+    );
+    base.implementationSourceIds = normalizeIdList(
+      base.implementationSourceIds,
+      "D2 source",
+      blockingErrors,
+    );
+    base.canonicalRequirementIds = normalizeIdList(
+      base.canonicalRequirementIds,
+      "canonical requirement",
+      blockingErrors,
+    );
     base.comparisonDimensions = uniqueSorted(
       base.comparisonDimensions,
     ) as typeof base.comparisonDimensions;
-    validateBlindSourceIds(base, blockingErrors);
+    validateBlindSourceIds(base, blockingErrors, missingMaterialInputs);
   }
 
   const totalInlineBytes = sources.reduce(
@@ -113,9 +167,7 @@ export function normalizeRequest(
 
   const seedFingerprint = sha256(canonicalJson({ ...base, taskId: undefined }));
   const taskId = request.taskId ?? `task-${seedFingerprint.slice(0, 12)}`;
-  const title =
-    request.title?.trim() ||
-    request.objective.trim().split(/\r?\n/u)[0]!.slice(0, 160);
+  const title = base.title || base.objective.split("\n")[0]!.slice(0, 160);
   const language =
     request.language === "auto"
       ? detectLanguage(request.objective)
@@ -129,9 +181,9 @@ export function normalizeRequest(
   const requestFingerprint = sha256(canonicalJson(normalizedRequest));
 
   for (const source of sources) {
-    if (source.required && !source.path && source.content === undefined) {
+    if (!source.path && source.content === undefined) {
       missingMaterialInputs.push(
-        `required source ${source.id} has neither path nor content`,
+        `source ${source.id} has neither path nor content`,
       );
     }
   }
@@ -151,8 +203,8 @@ export function normalizeRequest(
 function normalizeRepository(repository: RepositoryRef): RepositoryRef {
   return {
     ...repository,
-    id: repository.id.trim(),
-    root: repository.root.trim(),
+    id: normalizeId(repository.id),
+    root: normalizePath(repository.root.trim()),
     ...(repository.role ? { role: repository.role.trim() } : {}),
     rulesPaths: uniqueSorted(
       repository.rulesPaths.map((value) => value.trim()),
@@ -181,8 +233,11 @@ function normalizeSource(
 
   return {
     ...source,
-    id: source.id.trim(),
-    ...(source.path ? { path: source.path.trim() } : {}),
+    id: normalizeId(source.id),
+    ...(source.path ? { path: normalizePath(source.path.trim()) } : {}),
+    ...(source.realPath
+      ? { realPath: normalizePath(source.realPath.trim()) }
+      : {}),
     ...(normalizedContent !== undefined ? { content: normalizedContent } : {}),
     ...(contentHash
       ? { sha256: contentHash }
@@ -196,7 +251,7 @@ function normalizeRequirements(requirements: Requirement[]): Requirement[] {
   return [...requirements]
     .map((requirement) => ({
       ...requirement,
-      id: requirement.id.trim(),
+      id: normalizeId(requirement.id),
       claim: requirement.claim.trim(),
       ...(requirement.owner ? { owner: requirement.owner.trim() } : {}),
       proofClasses: uniqueSorted(
@@ -239,56 +294,233 @@ function validatePartitionIds(
   errors: string[],
   missing: string[],
 ): void {
-  const sourceIds = new Set(request.sources.map((source) => source.id));
+  const sourceById = new Map(
+    request.sources.map((source) => [source.id, source]),
+  );
   const partitions = [
-    ["intent", request.discoveryPartitions.intentSourceIds],
-    ["implementation", request.discoveryPartitions.implementationSourceIds],
-    ["governance", request.discoveryPartitions.governanceSourceIds],
+    [
+      "intent",
+      request.discoveryPartitions.intentSourceIds,
+      new Set<SourceRef["kind"]>(["task", "canonical_documentation"]),
+    ],
+    [
+      "implementation",
+      request.discoveryPartitions.implementationSourceIds,
+      new Set<SourceRef["kind"]>([
+        "implementation",
+        "schema",
+        "migration",
+        "test",
+        "runtime_evidence",
+      ]),
+    ],
+    [
+      "governance",
+      request.discoveryPartitions.governanceSourceIds,
+      new Set<SourceRef["kind"]>(["governance", "ownership"]),
+    ],
   ] as const;
 
-  for (const [name, ids] of partitions) {
+  const memberships = new Map<string, string>();
+
+  for (const [name, ids, allowedKinds] of partitions) {
     for (const id of ids) {
-      if (!sourceIds.has(id)) {
+      const source = sourceById.get(id);
+      if (!source) {
         errors.push(
           `${name} discovery partition references unknown source: ${id}`,
+        );
+        continue;
+      }
+      const priorMembership = memberships.get(id);
+      if (priorMembership) {
+        errors.push(
+          `documentation source ${id} appears in both ${priorMembership} and ${name} partitions`,
+        );
+      } else {
+        memberships.set(id, name);
+      }
+      if (!allowedKinds.has(source.kind)) {
+        errors.push(
+          `${name} discovery source ${id} has forbidden kind: ${source.kind}`,
+        );
+      }
+      if (
+        (name === "intent" || name === "governance") &&
+        source.authority !== "canonical"
+      ) {
+        errors.push(
+          `${name} discovery source ${id} must have canonical authority`,
         );
       }
     }
   }
 
+  validateCrossPartitionIdentity(
+    partitions.map(([name, ids]) => [name, ids] as const),
+    sourceById,
+    errors,
+    "documentation discovery",
+  );
+
+  for (const source of request.sources) {
+    if (!memberships.has(source.id)) {
+      errors.push(
+        `documentation source ${source.id} is not assigned to a discovery partition`,
+      );
+    }
+    if (source.path && (!source.realPath || !source.sha256)) {
+      missing.push(
+        `documentation source ${source.id} path identity requires realPath and sha256`,
+      );
+    }
+  }
+
   if (
-    request.targetState !== "to_be" &&
+    request.documentationBasis === "greenfield" &&
+    request.targetState !== "to_be"
+  ) {
+    errors.push(
+      "greenfield documentationBasis is valid only for targetState to_be",
+    );
+  }
+  if (
+    request.documentationBasis === "greenfield" &&
+    request.discoveryPartitions.implementationSourceIds.length > 0
+  ) {
+    errors.push(
+      "greenfield documentation must not claim an implementation baseline; use current_aware",
+    );
+  }
+  if (
+    request.documentationBasis === "current_aware" &&
     request.discoveryPartitions.implementationSourceIds.length === 0
   ) {
     missing.push(
-      "as-is or mixed documentation requires implementation discovery sources",
+      "current-aware documentation requires implementation discovery sources",
     );
   }
   if (request.discoveryPartitions.intentSourceIds.length === 0) {
     missing.push("documentation synthesis requires at least one intent source");
+  }
+  if (
+    request.documentationBasis === "current_aware" &&
+    request.requirePostDraftBlindCheck === "off"
+  ) {
+    errors.push(
+      "current-aware documentation cannot disable the post-draft blind check",
+    );
+  }
+  if (
+    request.documentationBasis === "greenfield" &&
+    request.requirePostDraftBlindCheck === "required"
+  ) {
+    errors.push(
+      "greenfield documentation has no implementation baseline for a strict blind check",
+    );
   }
 }
 
 function validateBlindSourceIds(
   request: BlindCheckRequest,
   errors: string[],
+  missing: string[],
 ): void {
-  const sourceIds = new Set(request.sources.map((source) => source.id));
+  const sourceById = new Map(
+    request.sources.map((source) => [source.id, source]),
+  );
   const documentationIds = new Set(request.documentationSourceIds);
-  for (const id of [
-    ...request.documentationSourceIds,
-    ...request.implementationSourceIds,
-  ]) {
-    if (!sourceIds.has(id)) {
+  const documentationKinds = new Set<SourceRef["kind"]>([
+    "task",
+    "canonical_documentation",
+    "governance",
+    "ownership",
+  ]);
+  const implementationKinds = new Set<SourceRef["kind"]>([
+    "implementation",
+    "schema",
+    "migration",
+    "test",
+    "runtime_evidence",
+  ]);
+
+  for (const id of request.documentationSourceIds) {
+    const source = sourceById.get(id);
+    if (!source) {
       errors.push(`blind-check allowlist references unknown source: ${id}`);
+      continue;
+    }
+    if (
+      !documentationKinds.has(source.kind) ||
+      source.authority !== "canonical"
+    ) {
+      errors.push(
+        `D1 source ${id} must be canonical documentation/governance, not ${source.kind}/${source.authority}`,
+      );
+    }
+    if (
+      request.strictIsolation &&
+      (!source.sha256 || (source.path && !source.realPath))
+    ) {
+      missing.push(
+        `strict D1 source ${id} requires sha256 and realPath for path inputs`,
+      );
     }
   }
+
   for (const id of request.implementationSourceIds) {
     if (documentationIds.has(id)) {
       errors.push(
         `blind-check source ${id} appears in both D1 and D2 allowlists`,
       );
     }
+    const source = sourceById.get(id);
+    if (!source) {
+      errors.push(`blind-check allowlist references unknown source: ${id}`);
+      continue;
+    }
+    if (!implementationKinds.has(source.kind)) {
+      errors.push(`D2 source ${id} has forbidden kind: ${source.kind}`);
+    }
+    if (
+      request.strictIsolation &&
+      (!source.sha256 || (source.path && !source.realPath))
+    ) {
+      missing.push(
+        `strict D2 source ${id} requires sha256 and realPath for path inputs`,
+      );
+    }
+  }
+
+  const assignedIds = new Set([
+    ...request.documentationSourceIds,
+    ...request.implementationSourceIds,
+  ]);
+  for (const source of request.sources) {
+    if (!assignedIds.has(source.id)) {
+      errors.push(
+        `blind-check source ${source.id} is not assigned to D1 or D2`,
+      );
+    }
+  }
+
+  validateCrossPartitionIdentity(
+    [
+      ["D1", request.documentationSourceIds],
+      ["D2", request.implementationSourceIds],
+    ],
+    sourceById,
+    errors,
+    "blind-check",
+  );
+
+  if (
+    request.strictIsolation &&
+    request.capabilities?.agentIsolation === "unsupported"
+  ) {
+    errors.push(
+      "strict blind-check isolation is unavailable in the reported host capabilities",
+    );
   }
 }
 
@@ -297,6 +529,94 @@ function detectLanguage(value: string): "ru" | "en" {
 }
 
 function isWithinTmp(path: string): boolean {
-  const normalized = normalize(path);
+  const normalized = normalizePath(path);
   return normalized === "/tmp" || normalized.startsWith(`/tmp${sep}`);
+}
+
+function normalizeId(value: string): string {
+  return value.trim().normalize("NFC");
+}
+
+function normalizeIdList(
+  values: readonly string[],
+  label: string,
+  errors: string[],
+): string[] {
+  const normalized = values
+    .map(normalizeId)
+    .sort((left, right) => left.localeCompare(right, "en"));
+  validateUniqueValues(normalized, label, errors);
+  return normalized;
+}
+
+function validateUniqueValues(
+  values: readonly string[],
+  label: string,
+  errors: string[],
+): void {
+  const seen = new Set<string>();
+  for (const value of values) {
+    if (seen.has(value)) {
+      errors.push(`duplicate ${label} id: ${value}`);
+    }
+    seen.add(value);
+  }
+}
+
+function validateCrossPartitionIdentity(
+  partitions: readonly (readonly [string, readonly string[]])[],
+  sourceById: Map<string, SourceRef>,
+  errors: string[],
+  label: string,
+): void {
+  for (let leftIndex = 0; leftIndex < partitions.length; leftIndex += 1) {
+    const left = partitions[leftIndex]!;
+    for (
+      let rightIndex = leftIndex + 1;
+      rightIndex < partitions.length;
+      rightIndex += 1
+    ) {
+      const right = partitions[rightIndex]!;
+      for (const leftId of left[1]) {
+        const leftSource = sourceById.get(leftId);
+        if (!leftSource) continue;
+        for (const rightId of right[1]) {
+          const rightSource = sourceById.get(rightId);
+          if (!rightSource) continue;
+          if (sourcesOverlap(leftSource, rightSource)) {
+            errors.push(
+              `${label} sources ${leftId} (${left[0]}) and ${rightId} (${right[0]}) share a physical/content identity`,
+            );
+          }
+        }
+      }
+    }
+  }
+}
+
+function sourcesOverlap(left: SourceRef, right: SourceRef): boolean {
+  if (left.sha256 && right.sha256 && left.sha256 === right.sha256) {
+    return true;
+  }
+  const leftIdentityPath = left.realPath ?? left.path;
+  const rightIdentityPath = right.realPath ?? right.path;
+  if (!leftIdentityPath || !rightIdentityPath) {
+    return false;
+  }
+  const leftPath = resolve(leftIdentityPath);
+  const rightPath = resolve(rightIdentityPath);
+  return (
+    isSameOrAncestor(leftPath, rightPath) ||
+    isSameOrAncestor(rightPath, leftPath)
+  );
+}
+
+function isSameOrAncestor(parent: string, child: string): boolean {
+  const childRelative = relative(parent, child);
+  return (
+    childRelative === "" ||
+    (!childRelative.startsWith(`..${sep}`) &&
+      childRelative !== ".." &&
+      !isAbsolute(childRelative))
+  );
 }

@@ -23,19 +23,39 @@ export const riskSignalSchema = z.enum([
 
 export const riskProfileSchema = z.enum(["compact", "standard", "critical"]);
 
+const stableIdSchema = (max: number) =>
+  z
+    .string()
+    .min(1)
+    .max(max)
+    .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/u);
+
+const nonBlankStringSchema = (max: number) =>
+  z
+    .string()
+    .min(1)
+    .max(max)
+    .refine((value) => value.trim().length > 0, "must not be blank");
+
+const singleLineStringSchema = (max: number) =>
+  nonBlankStringSchema(max).refine(
+    (value) => !/[\u0000-\u001f\u007f]/u.test(value),
+    "must not contain control characters or newlines",
+  );
+
 export const repositorySchema = z.strictObject({
-  id: z.string().min(1).max(80),
-  root: z.string().min(1).max(4096),
-  role: z.string().min(1).max(240).optional(),
+  id: stableIdSchema(80),
+  root: singleLineStringSchema(4096),
+  role: singleLineStringSchema(240).optional(),
   contextHash: z
     .string()
     .regex(/^[a-f0-9]{64}$/u)
     .optional(),
-  rulesPaths: z.array(z.string().min(1).max(4096)).max(32).default([]),
+  rulesPaths: z.array(singleLineStringSchema(4096)).max(32).default([]),
 });
 
 export const sourceSchema = z.strictObject({
-  id: z.string().min(1).max(120),
+  id: stableIdSchema(120),
   kind: z.enum([
     "task",
     "canonical_documentation",
@@ -47,7 +67,8 @@ export const sourceSchema = z.strictObject({
     "test",
     "runtime_evidence",
   ]),
-  path: z.string().min(1).max(4096).optional(),
+  path: singleLineStringSchema(4096).optional(),
+  realPath: singleLineStringSchema(4096).optional(),
   content: z.string().max(65_536).optional(),
   sha256: z
     .string()
@@ -86,10 +107,10 @@ const commonShape = {
     .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/u)
     .max(96)
     .optional(),
-  title: z.string().min(1).max(240).optional(),
-  objective: z.string().min(1).max(12_000),
+  title: singleLineStringSchema(240).optional(),
+  objective: nonBlankStringSchema(12_000),
   context: z.string().max(32_000).optional(),
-  nonGoals: z.array(z.string().min(1).max(4000)).max(64).default([]),
+  nonGoals: z.array(nonBlankStringSchema(4000)).max(64).default([]),
   language: z.enum(["auto", "ru", "en"]).default("auto"),
   repositories: z.array(repositorySchema).max(8).default([]),
   sources: z.array(sourceSchema).max(64).default([]),
@@ -100,7 +121,7 @@ const commonShape = {
     .default("prompt_only"),
   goalMode: z.enum(["plain", "persistent_requested"]).default("plain"),
   modelRouting: z.enum(["adaptive", "omit"]).default("adaptive"),
-  artifactRoot: z.string().min(1).max(4096).optional(),
+  artifactRoot: singleLineStringSchema(4096).optional(),
   capabilities: capabilitySchema.optional(),
 };
 
@@ -120,14 +141,14 @@ export const proofClassSchema = z.enum([
 ]);
 
 export const requirementSchema = z.strictObject({
-  id: z.string().min(1).max(120),
-  claim: z.string().min(1).max(8000),
+  id: stableIdSchema(120),
+  claim: nonBlankStringSchema(8000),
   blocking: z.boolean().default(true),
-  owner: z.string().min(1).max(240).optional(),
+  owner: singleLineStringSchema(240).optional(),
   proofClasses: z.array(proofClassSchema).max(16).default([]),
-  positiveEvidence: z.array(z.string().min(1).max(2000)).max(32).default([]),
-  falsificationChecks: z.array(z.string().min(1).max(2000)).max(32).default([]),
-  staleWhen: z.array(z.string().min(1).max(2000)).max(32).default([]),
+  positiveEvidence: z.array(nonBlankStringSchema(2000)).max(32).default([]),
+  falsificationChecks: z.array(nonBlankStringSchema(2000)).max(32).default([]),
+  staleWhen: z.array(nonBlankStringSchema(2000)).max(32).default([]),
   order: z.number().int().min(0).max(100_000).optional(),
 });
 
@@ -136,7 +157,7 @@ const auditModeSchema = z.enum(["auto", "required", "off"]);
 export const implementationRequestSchema = z.strictObject({
   ...commonShape,
   requirements: z.array(requirementSchema).max(256).default([]),
-  ownershipRules: z.array(z.string().min(1).max(4000)).max(128).default([]),
+  ownershipRules: z.array(nonBlankStringSchema(4000)).max(128).default([]),
   audits: z
     .strictObject({
       testingAcceptance: auditModeSchema.default("auto"),
@@ -151,7 +172,7 @@ export const implementationRequestSchema = z.strictObject({
 });
 
 export const deliverableSchema = z.strictObject({
-  id: z.string().min(1).max(120),
+  id: stableIdSchema(120),
   kind: z.enum([
     "architecture_spec",
     "behavior_spec",
@@ -159,24 +180,21 @@ export const deliverableSchema = z.strictObject({
     "implementation_task",
     "acceptance_spec",
   ]),
-  outputPath: z.string().min(1).max(4096),
-  owner: z.string().min(1).max(240).optional(),
+  outputPath: singleLineStringSchema(4096),
+  owner: singleLineStringSchema(240).optional(),
 });
 
 export const documentationRequestSchema = z.strictObject({
   ...commonShape,
   targetState: z.enum(["as_is", "to_be", "mixed"]),
+  documentationBasis: z
+    .enum(["current_aware", "greenfield"])
+    .default("current_aware"),
   deliverables: z.array(deliverableSchema).min(1).max(32),
   discoveryPartitions: z.strictObject({
-    intentSourceIds: z.array(z.string().min(1).max(120)).max(64).default([]),
-    implementationSourceIds: z
-      .array(z.string().min(1).max(120))
-      .max(64)
-      .default([]),
-    governanceSourceIds: z
-      .array(z.string().min(1).max(120))
-      .max(64)
-      .default([]),
+    intentSourceIds: z.array(stableIdSchema(120)).max(64).default([]),
+    implementationSourceIds: z.array(stableIdSchema(120)).max(64).default([]),
+    governanceSourceIds: z.array(stableIdSchema(120)).max(64).default([]),
   }),
   requireColdReaderAudit: z.boolean().default(true),
   requirePostDraftBlindCheck: auditModeSchema.default("auto"),
@@ -199,42 +217,53 @@ export const comparisonDimensionSchema = z.enum([
 
 export const blindCheckRequestSchema = z.strictObject({
   ...commonShape,
-  documentationSourceIds: z.array(z.string().min(1).max(120)).min(1).max(64),
-  implementationSourceIds: z.array(z.string().min(1).max(120)).min(1).max(64),
-  canonicalRequirementIds: z
-    .array(z.string().min(1).max(120))
-    .max(512)
-    .default([]),
+  documentationSourceIds: z.array(stableIdSchema(120)).min(1).max(64),
+  implementationSourceIds: z.array(stableIdSchema(120)).min(1).max(64),
+  canonicalRequirementIds: z.array(stableIdSchema(120)).max(512).default([]),
   strictIsolation: z.boolean().default(true),
   comparisonDimensions: z.array(comparisonDimensionSchema).min(1).max(12),
 });
 
 export const inspectWorkspaceRequestSchema = z.strictObject({
-  workspaceRoots: z.array(z.string().min(1).max(4096)).min(1).max(8),
-  sourcePaths: z.array(z.string().min(1).max(4096)).max(64).default([]),
+  workspaceRoots: z.array(singleLineStringSchema(4096)).min(1).max(8),
+  sourcePaths: z.array(singleLineStringSchema(4096)).max(64).default([]),
   maxSourceBytes: z.number().int().min(1).max(1_048_576).default(131_072),
 });
 
-export const validateTaskRequestSchema = z.strictObject({
-  prompt: z.string().min(1).max(400_000),
-  operation: z.enum([
-    "implementation_task",
-    "documentation_task",
-    "blind_check_task",
-  ]),
-  riskProfile: riskProfileSchema,
-  riskSignals: z.array(riskSignalSchema).max(15).default([]),
-  goalMode: z.enum(["plain", "persistent_requested"]).default("plain"),
-  strictBlindRequested: z.boolean().default(false),
-  expectedPromptSha256: z
-    .string()
-    .regex(/^[a-f0-9]{64}$/u)
-    .optional(),
-});
+export const validateTaskRequestSchema = z
+  .strictObject({
+    prompt: z.string().min(1).max(400_000),
+    operation: z.enum([
+      "implementation_task",
+      "documentation_task",
+      "blind_check_task",
+    ]),
+    request: z.union([
+      implementationRequestSchema,
+      documentationRequestSchema,
+      blindCheckRequestSchema,
+    ]),
+    expectedPromptSha256: z.string().regex(/^[a-f0-9]{64}$/u),
+  })
+  .superRefine((value, context) => {
+    const actualOperation =
+      "requirements" in value.request
+        ? "implementation_task"
+        : "deliverables" in value.request
+          ? "documentation_task"
+          : "blind_check_task";
+    if (value.operation !== actualOperation) {
+      context.addIssue({
+        code: "custom",
+        path: ["request"],
+        message: `request shape belongs to ${actualOperation}, not ${value.operation}`,
+      });
+    }
+  });
 
 export const forgeResultSchema = z.strictObject({
   schemaVersion: z.literal(SCHEMA_VERSION),
-  generatorVersion: z.string(),
+  generatorVersion: z.literal(GENERATOR_VERSION),
   operation: z.enum([
     "implementation_task",
     "documentation_task",
@@ -242,8 +271,8 @@ export const forgeResultSchema = z.strictObject({
   ]),
   status: z.enum(["ready", "needs_input", "invalid"]),
   taskId: z.string(),
-  requestFingerprint: z.string(),
-  policyHash: z.string(),
+  requestFingerprint: z.string().regex(/^[a-f0-9]{64}$/u),
+  policyHash: z.string().regex(/^[a-f0-9]{64}$/u),
   decisions: z.strictObject({
     riskProfile: riskProfileSchema,
     reasons: z.array(z.string()),
@@ -255,7 +284,7 @@ export const forgeResultSchema = z.strictObject({
   prompt: z.strictObject({
     mediaType: z.literal("text/markdown"),
     text: z.string(),
-    sha256: z.string(),
+    sha256: z.string().regex(/^[a-f0-9]{64}$/u),
   }),
   package: z
     .array(
@@ -263,7 +292,7 @@ export const forgeResultSchema = z.strictObject({
         relativePath: z.string(),
         mediaType: z.enum(["text/markdown", "application/json"]),
         content: z.string(),
-        sha256: z.string(),
+        sha256: z.string().regex(/^[a-f0-9]{64}$/u),
       }),
     )
     .optional(),
@@ -281,6 +310,77 @@ export const forgeResultSchema = z.strictObject({
       materialImpact: z.string(),
     }),
   ),
+});
+
+export const implementationForgeResultSchema = forgeResultSchema.safeExtend({
+  operation: z.literal("implementation_task"),
+});
+
+export const documentationForgeResultSchema = forgeResultSchema.safeExtend({
+  operation: z.literal("documentation_task"),
+});
+
+export const blindCheckForgeResultSchema = forgeResultSchema.safeExtend({
+  operation: z.literal("blind_check_task"),
+});
+
+const sha256Schema = z.string().regex(/^[a-f0-9]{64}$/u);
+
+const gitSnapshotSchema = z.strictObject({
+  root: z.string(),
+  branch: z.string().nullable(),
+  head: z.string(),
+  dirty: z.boolean(),
+  dirtyEntries: z.number().int().nonnegative(),
+  untrackedEntries: z.number().int().nonnegative(),
+  dirtyManifestHash: sha256Schema,
+  contentBound: z.boolean(),
+});
+
+const workspaceInspectionSchema = z.strictObject({
+  requestedRoot: z.string(),
+  realRoot: z.string(),
+  git: gitSnapshotSchema.nullable(),
+  rules: z.array(z.string()),
+  planning: z.array(z.string()),
+  detected: z.strictObject({
+    packageManager: z.string().nullable(),
+    monorepo: z.boolean(),
+    playwright: z.boolean(),
+    graphql: z.boolean(),
+  }),
+  packageScripts: z.array(z.string()),
+});
+
+const sourceInspectionSchema = z.strictObject({
+  requestedPath: z.string(),
+  realPath: z.string(),
+  size: z.number().int().nonnegative(),
+  sha256: sha256Schema,
+});
+
+export const inspectWorkspaceResultSchema = z.strictObject({
+  schemaVersion: z.literal(SCHEMA_VERSION),
+  status: z.enum(["ready", "partial", "denied"]),
+  allowedRoots: z.array(z.string()),
+  workspaces: z.array(workspaceInspectionSchema),
+  sources: z.array(sourceInspectionSchema),
+  warnings: z.array(z.string()),
+  errors: z.array(z.string()),
+  contextHash: sha256Schema,
+});
+
+export const promptValidationResultSchema = z.strictObject({
+  pass: z.boolean(),
+  assurance: z.enum(["recompiled", "structural_only"]),
+  promptSha256: sha256Schema,
+  expectedPromptSha256: sha256Schema,
+  requestFingerprint: sha256Schema,
+  policyHash: sha256Schema,
+  forgeStatus: z.enum(["ready", "needs_input", "invalid"]),
+  unresolvedPlaceholders: z.array(z.string()),
+  blockingErrors: z.array(z.string()),
+  warnings: z.array(z.string()),
 });
 
 export type RiskSignal = z.infer<typeof riskSignalSchema>;

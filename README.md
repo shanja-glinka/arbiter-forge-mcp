@@ -31,11 +31,38 @@ both. Two registrations would expose duplicate tool sets.
 | `forge_implementation_task` | Adaptive Compact/Standard/Critical implementation prompt with applicable independent audits.    |
 | `forge_documentation_task`  | Intent/code/governance discovery, arbiter disposition, authoring, and cold-reader verification. |
 | `forge_blind_check_task`    | Isolated D1/D2/D3 comparison with forbidden-extra and ownership mismatch detection.             |
-| `validate_task`             | Goal, audit, Playwright/GraphQL, blind-isolation, artifact, and terminal-gate checks.           |
+| `validate_task`             | Deterministic request recompile, byte identity, ready-state, and structural terminal checks.    |
+
+## Prompts and resources
+
+The three prompts are convenience adapters for concise interactive use. Use the typed `forge_*`
+tools when the task needs repositories, source manifests, requirements, capabilities, or other full
+protocol inputs.
+
+| Prompt                      | Arguments                                                                                                                                              |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `forge-implementation-task` | `objective`; optional comma-separated `riskSignals`; `persistentGoal` (`no` or `yes`).                                                                 |
+| `forge-documentation-task`  | `objective`, `targetState`, explicit `documentationBasis`, `outputPath`; current-aware mode also requires implementation path, real path, and SHA-256. |
+| `forge-blind-check-task`    | `objective` plus documentation/implementation locator, canonical real path, and SHA-256 pairs.                                                         |
+
+Five read-only resources expose the packaged long-form policy assets:
+
+| Resource method                  | URI                                              |
+| -------------------------------- | ------------------------------------------------ |
+| `orchestration-method`           | `arbiter-forge://method/orchestration`           |
+| `documentation-synthesis-method` | `arbiter-forge://method/documentation-synthesis` |
+| `blind-check-method`             | `arbiter-forge://method/blind-check`             |
+| `ui-playwright-method`           | `arbiter-forge://method/ui-playwright`           |
+| `model-goal-method`              | `arbiter-forge://method/model-goal`              |
 
 Every forge result contains `requestFingerprint`, `policyHash`, and `prompt.sha256`. Identical
 normalized v1 inputs produce identical output. The server performs no LLM, network, browser, Git
 mutation, goal mutation, or target-project write.
+
+`validate_task` accepts the generated prompt, its operation, the original typed forge request, and
+the forge result's `prompt.sha256`. It recompiles that request and returns `assurance: "recompiled"`
+only when the request is `ready` and prompt bytes are identical. A manually edited prompt is
+`structural_only` and cannot PASS; change the typed request and forge again.
 
 ## Requirements
 
@@ -82,6 +109,8 @@ codex mcp list
 
 Workspace inspection fails closed when `ARBITER_FORGE_ALLOWED_ROOTS_JSON` is absent or invalid.
 The three forge tools and `validate_task` still work because they do not read project files.
+Direct mode receives the allowlist from its explicit `config.toml` `env` table; it does not require
+the variable to be exported in the environment that launches Codex.
 
 ## Plugin mode
 
@@ -91,8 +120,27 @@ The repository is also a valid plugin:
 - `.mcp.json` starts the bundled server relative to the plugin root;
 - `skills/arbiter-forge/SKILL.md` routes Codex to the correct workflow.
 
-When installing the plugin, remove or disable the direct `[mcp_servers.arbiter-forge]` entry first.
-Conversely, do not activate plugin-owned `.mcp.json` while the direct entry is enabled.
+Plugin-owned `.mcp.json` stays portable: it contains no machine path and passes
+`ARBITER_FORGE_ALLOWED_ROOTS_JSON` through from the environment that launches Codex. Set the value
+before starting or restarting Codex, using absolute roots for that machine:
+
+```bash
+export ARBITER_FORGE_ALLOWED_ROOTS_JSON='["/absolute/path/to/workspaces"]'
+```
+
+The `env_vars` declaration passes through an existing value; it does not create a default. If the
+launching environment omits the variable or supplies invalid JSON, `inspect_workspace` returns a
+fail-closed denial while the three forge tools and `validate_task` remain available. Restart Codex
+after changing the launch environment.
+
+Use exactly one MCP registration route in a Codex profile:
+
+- for plugin mode, remove or disable the direct `[mcp_servers.arbiter-forge]` entry before installing
+  or activating the plugin;
+- for direct mode, keep the `config.toml` entry and do not activate the plugin-owned `.mcp.json`.
+
+The Arbiter Forge skill may remain available with direct registration only when its plugin-owned MCP
+server is not also active.
 
 ## Typical use
 
@@ -101,7 +149,8 @@ Ask Codex to use Arbiter Forge, or call the MCP sequence explicitly:
 1. `inspect_workspace` with absolute workspace and selected source paths when preflight is useful.
 2. Exactly one `forge_*` tool with the objective, source manifest, typed risk signals, and actual
    host capabilities.
-3. `validate_task` after any human edit to the generated prompt.
+3. `validate_task` with the original typed request and generated hash. Human edits are diagnostics
+   only; re-forge to obtain a new PASS-eligible prompt.
 4. Execute the validated prompt only when execution was requested.
 
 Example implementation input:
@@ -128,15 +177,18 @@ Example implementation input:
 ```
 
 Model routes are preferences. The generated task records the actual route and degrades honestly if
-the host cannot select Sol, Terra, or Luna. A persistent goal launch line appears only when
-`goalMode` is `persistent_requested`.
+the host cannot select Sol, Terra, or Luna. `goalMode: "persistent_requested"` emits a `get_goal` →
+conditional `create_goal` lifecycle, but never pre-emits `/goal` before state inspection.
 
 ## Blind-check semantics
 
 D1 reads only canonical documentation and reconstructs expected behavior. D2 reads only code,
-schema, migrations, tests, and explicitly allowed runtime evidence. D3 receives only normalized
-D1/D2 reports and classifies each mapping, including `extra_or_forbidden_behavior`. The root arbiter
-then verifies material findings against primary sources.
+schema, migrations, tests, and explicitly allowed runtime evidence. Every supplied source belongs
+to exactly one allowlist; path sources carry an inspected `realPath` and content or complete-manifest
+SHA-256 so aliases cannot masquerade as isolation. D3 receives only normalized D1/D2 reports and
+performs a full-outer comparison, including every D2-only behavior as
+`extra_or_forbidden_behavior`. The root arbiter then verifies material findings against primary
+sources.
 
 If fresh-context isolation and actual-read manifests cannot be demonstrated, the procedure is
 labelled `independent_documentation_review`; it cannot claim strict blind-check PASS. This is the

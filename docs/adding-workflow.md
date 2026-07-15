@@ -13,8 +13,9 @@ execution.
    keeps hashes free of timestamps, random IDs, and locale-dependent slugs.
 4. Add a compiler branch in `src/core/render.ts`. Reuse the hard-arbiter, artifact, correction, and
    terminal gates. Include only applicable policies.
-5. Add validation invariants in `src/core/validate.ts`. Generation must call the same validator
-   exposed to users.
+5. Add structural invariants in `src/core/validate.ts` and route the operation through deterministic
+   revalidation in `src/core/revalidate.ts`. User-facing PASS requires a ready byte-identical
+   recompile of the original typed request.
 6. Register a thin read-only MCP tool in `src/server.ts`. It must not execute the generated task.
 7. Add or update one canonical policy file under `skills/arbiter-forge/references/` and route it from
    `SKILL.md`.

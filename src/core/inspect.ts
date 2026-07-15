@@ -51,14 +51,80 @@ export interface InspectWorkspaceResult {
 
 const DENIED_BASENAMES = new Set([
   ".env",
+  ".git-credentials",
+  ".gitconfig",
   ".npmrc",
+  ".pnpmrc",
   ".pypirc",
+  ".terraformrc",
+  ".yarnrc",
+  ".yarnrc.yml",
   ".netrc",
+  "application_default_credentials.json",
+  "auth.json",
+  "auth.toml",
+  "azureauth.json",
   "credentials",
   "credentials.json",
+  "credentials.toml",
+  "dockerconfigjson",
+  "id_dsa",
+  "id_ecdsa",
   "id_rsa",
   "id_ed25519",
+  "kubeconfig",
+  "pip.conf",
+  "service-account-key.json",
+  "service-account.json",
+  "settings.xml",
+  "terraform.tfstate",
+  "terraform.tfstate.backup",
 ]);
+
+const DENIED_PATH_SEGMENTS = new Set([
+  ".aws",
+  ".azure",
+  ".docker",
+  ".git",
+  ".gnupg",
+  ".kube",
+  ".ssh",
+  ".terraform",
+  "node_modules",
+]);
+
+const DENIED_CONFIG_NAMESPACES = new Set(["gcloud", "gh", "glab"]);
+const SENSITIVE_DATA_EXTENSIONS = new Set([
+  "",
+  ".conf",
+  ".config",
+  ".cred",
+  ".credentials",
+  ".ini",
+  ".json",
+  ".properties",
+  ".toml",
+  ".txt",
+  ".xml",
+  ".yaml",
+  ".yml",
+]);
+const SENSITIVE_DATA_NAME =
+  /(?:^|[._-])(?:api[._-]?keys?|auth|credentials?|passwords?|private[._-]?keys?|refresh[._-]?tokens?|secrets?|service[._-]?accounts?|tokens?)(?:[._-]|$)/iu;
+
+const GIT_NULL_DEVICE = process.platform === "win32" ? "NUL" : "/dev/null";
+const SAFE_GIT_CONFIG_ARGS = [
+  "-c",
+  "core.fsmonitor=false",
+  "-c",
+  `core.hooksPath=${GIT_NULL_DEVICE}`,
+  "-c",
+  `core.attributesFile=${GIT_NULL_DEVICE}`,
+  "-c",
+  `core.excludesFile=${GIT_NULL_DEVICE}`,
+  "-c",
+  "credential.helper=",
+] as const;
 
 const KNOWN_RULE_PATHS = [
   "AGENTS.md",
@@ -199,13 +265,21 @@ function inspectGit(root: string, warnings: string[]): GitSnapshot | null {
     return null;
   }
 
+  const filterOverrides = safeFilterConfigOverrides(root);
+  if (!filterOverrides.ok) {
+    warnings.push(
+      `Git filter configuration could not be safely neutralized for ${root}; snapshot inspection was skipped.`,
+    );
+    return null;
+  }
+
   const head = runGit(root, ["rev-parse", "HEAD"]);
   const branch = runGit(root, ["symbolic-ref", "--quiet", "--short", "HEAD"]);
-  const status = runGit(root, [
-    "status",
-    "--porcelain=v1",
-    "--untracked-files=all",
-  ]);
+  const status = runGit(
+    root,
+    ["status", "--porcelain=v1", "--untracked-files=all"],
+    filterOverrides.args,
+  );
   if (!head.ok || !status.ok) {
     warnings.push(`Git snapshot incomplete for ${root}.`);
     return null;
@@ -213,13 +287,16 @@ function inspectGit(root: string, warnings: string[]): GitSnapshot | null {
   const statusLines = status.stdout
     ? status.stdout.split("\n").filter(Boolean)
     : [];
-  const trackedDiff = runGitRaw(root, ["diff", "--binary", "HEAD", "--"]);
-  const untracked = runGitRaw(root, [
-    "ls-files",
-    "--others",
-    "--exclude-standard",
-    "-z",
-  ]);
+  const trackedDiff = runGitRaw(
+    root,
+    ["diff", "--no-ext-diff", "--no-textconv", "--binary", "HEAD", "--"],
+    filterOverrides.args,
+  );
+  const untracked = runGitRaw(
+    root,
+    ["ls-files", "--others", "--exclude-standard", "-z"],
+    filterOverrides.args,
+  );
   const untrackedEntries = untracked.ok
     ? untracked.stdout.split("\0").filter(Boolean)
     : [];
@@ -232,7 +309,11 @@ function inspectGit(root: string, warnings: string[]): GitSnapshot | null {
     contentBound = false;
   } else {
     for (const path of untrackedEntries) {
-      const hash = runGit(root, ["hash-object", "--", path]);
+      const hash = runGit(
+        root,
+        ["hash-object", "--no-filters", "--", path],
+        filterOverrides.args,
+      );
       if (!hash.ok) {
         contentBound = false;
         break;
@@ -263,26 +344,109 @@ function inspectGit(root: string, warnings: string[]): GitSnapshot | null {
   };
 }
 
-function runGit(cwd: string, args: string[]): { ok: boolean; stdout: string } {
-  const result = runGitRaw(cwd, args);
+function safeFilterConfigOverrides(root: string): {
+  ok: boolean;
+  args: string[];
+} {
+  const configuredFilters = runGitRaw(root, [
+    "config",
+    "--local",
+    "--includes",
+    "--name-only",
+    "--null",
+    "--get-regexp",
+    "^filter\\.",
+  ]);
+  if (configuredFilters.status === 1) {
+    return { ok: true, args: [] };
+  }
+  if (!configuredFilters.ok) {
+    return { ok: false, args: [] };
+  }
+
+  const drivers = new Set<string>();
+  for (const key of configuredFilters.stdout.split("\0").filter(Boolean)) {
+    const match = /^filter\.(.+)\.(?:clean|process|required|smudge)$/iu.exec(
+      key,
+    );
+    if (!match) {
+      continue;
+    }
+    const driver = match[1]!;
+    if (!/^[a-z0-9][a-z0-9._-]{0,127}$/iu.test(driver)) {
+      return { ok: false, args: [] };
+    }
+    drivers.add(driver);
+  }
+
+  return {
+    ok: true,
+    args: [...drivers]
+      .sort((left, right) => left.localeCompare(right, "en"))
+      .flatMap((driver) => [
+        "-c",
+        `filter.${driver}.clean=`,
+        "-c",
+        `filter.${driver}.smudge=`,
+        "-c",
+        `filter.${driver}.process=`,
+        "-c",
+        `filter.${driver}.required=false`,
+      ]),
+  };
+}
+
+function runGit(
+  cwd: string,
+  args: string[],
+  configOverrides: readonly string[] = [],
+): { ok: boolean; stdout: string } {
+  const result = runGitRaw(cwd, args, configOverrides);
   return { ok: result.ok, stdout: result.stdout.trim() };
 }
 
 function runGitRaw(
   cwd: string,
   args: string[],
-): { ok: boolean; stdout: string } {
-  const result = spawnSync("git", args, {
-    cwd,
-    encoding: "utf8",
-    shell: false,
-    timeout: 5000,
-    windowsHide: true,
-    maxBuffer: 32 * 1024 * 1024,
-  });
+  configOverrides: readonly string[] = [],
+): { ok: boolean; status: number | null; stdout: string } {
+  const result = spawnSync(
+    "git",
+    ["--no-pager", ...SAFE_GIT_CONFIG_ARGS, ...configOverrides, ...args],
+    {
+      cwd,
+      encoding: "utf8",
+      env: safeGitEnvironment(),
+      shell: false,
+      timeout: 5000,
+      windowsHide: true,
+      maxBuffer: 32 * 1024 * 1024,
+    },
+  );
   return {
     ok: result.status === 0,
+    status: result.status,
     stdout: result.stdout ?? "",
+  };
+}
+
+function safeGitEnvironment(): NodeJS.ProcessEnv {
+  const environment = { ...process.env };
+  for (const key of Object.keys(environment)) {
+    if (key.startsWith("GIT_")) {
+      delete environment[key];
+    }
+  }
+  return {
+    ...environment,
+    GIT_ATTR_NOSYSTEM: "1",
+    GIT_CONFIG_GLOBAL: GIT_NULL_DEVICE,
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_CONFIG_SYSTEM: GIT_NULL_DEVICE,
+    GIT_NO_REPLACE_OBJECTS: "1",
+    GIT_OPTIONAL_LOCKS: "0",
+    GIT_TERMINAL_PROMPT: "0",
+    LC_ALL: "C",
   };
 }
 
@@ -346,12 +510,22 @@ function isWithin(candidate: string, root: string): boolean {
 
 function assertSafeSource(path: string): void {
   const name = basename(path).toLowerCase();
+  const segments = path.split(sep).map((segment) => segment.toLowerCase());
+  const extension = /(?:\.[^.]+)$/u.exec(name)?.[0] ?? "";
+  const hasDeniedConfigNamespace = segments.some(
+    (segment, index) =>
+      segment === ".config" &&
+      DENIED_CONFIG_NAMESPACES.has(segments[index + 1] ?? ""),
+  );
   if (
     DENIED_BASENAMES.has(name) ||
     name.startsWith(".env.") ||
-    /\.(?:pem|key|p12|pfx|jks)$/iu.test(name) ||
-    path.split(sep).includes(".git") ||
-    path.split(sep).includes("node_modules")
+    /\.(?:der|jks|key|keystore|p12|pfx|pem|pkcs12)$/iu.test(name) ||
+    /^id_(?:dsa|ecdsa|ed25519|rsa)(?:\.pub)?$/iu.test(name) ||
+    (SENSITIVE_DATA_EXTENSIONS.has(extension) &&
+      SENSITIVE_DATA_NAME.test(name)) ||
+    segments.some((segment) => DENIED_PATH_SEGMENTS.has(segment)) ||
+    hasDeniedConfigNamespace
   ) {
     throw new Error("sensitive or dependency metadata path is denied");
   }

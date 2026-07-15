@@ -13,7 +13,9 @@
     "developerName": "shanja-glinka",
     "category": "Productivity",
     "capabilities": ["MCP tools", "Skills"],
-    "defaultPrompt": "Use Arbiter Forge to produce and validate the smallest sufficient hard-arbiter task for my objective."
+    "defaultPrompt": [
+      "Use Arbiter Forge to produce and validate the smallest sufficient hard-arbiter task for my objective."
+    ]
   },
   "mcpServers": "./.mcp.json"
 }

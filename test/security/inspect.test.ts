@@ -1,6 +1,14 @@
-import { mkdtempSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import {
+  chmodSync,
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -80,6 +88,96 @@ describe("workspace inspection boundary", () => {
     );
   });
 
+  it("denies representative secret, cloud, SSH, and package-auth paths", () => {
+    const root = mkdtempSync(join(tmpdir(), "arbiter-forge-sensitive-"));
+    const relativePaths = [
+      "secrets.json",
+      "tokens.yaml",
+      ".aws/credentials",
+      ".config/gcloud/application_default_credentials.json",
+      ".docker/config.json",
+      ".ssh/id_ecdsa",
+      ".git-credentials",
+      ".npmrc",
+      ".pypirc",
+      "terraform.tfstate",
+    ];
+    const sensitivePaths = relativePaths.map((relativePath) => {
+      const path = join(root, relativePath);
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, "low-entropy-secret\n");
+      return path;
+    });
+    process.env.ARBITER_FORGE_ALLOWED_ROOTS_JSON = JSON.stringify([root]);
+
+    const result = inspectWorkspace({
+      workspaceRoots: [root],
+      sourcePaths: sensitivePaths,
+    });
+
+    expect(result.status).toBe("partial");
+    expect(result.sources).toEqual([]);
+    expect(result.errors).toHaveLength(sensitivePaths.length);
+    expect(
+      result.errors.every((error) =>
+        error.includes("sensitive or dependency metadata path is denied"),
+      ),
+    ).toBe(true);
+  });
+
+  it("neutralizes Git helpers and filters while retaining a content-bound snapshot", () => {
+    const root = mkdtempSync(join(tmpdir(), "arbiter-forge-safe-git-"));
+    const marker = join(root, "git-helper-executed");
+    const helper = join(root, "git-helper.cjs");
+    const hooks = join(root, "hooks");
+    const tracked = join(root, "tracked.txt");
+    mkdirSync(hooks);
+    writeFileSync(
+      helper,
+      `#!/usr/bin/env node\nconst fs = require("node:fs");\nfs.writeFileSync(${JSON.stringify(marker)}, "executed\\n");\nprocess.stdin.pipe(process.stdout);\n`,
+    );
+    chmodSync(helper, 0o755);
+    writeFileSync(
+      join(root, ".gitattributes"),
+      "*.txt diff=evil filter=evil\n",
+    );
+    writeFileSync(tracked, "base\n");
+    runFixtureGit(root, ["init", "-q"]);
+    runFixtureGit(root, ["config", "user.email", "audit@example.invalid"]);
+    runFixtureGit(root, ["config", "user.name", "Audit"]);
+    runFixtureGit(root, ["add", ".gitattributes", "tracked.txt"]);
+    runFixtureGit(root, ["commit", "-q", "-m", "base"]);
+    runFixtureGit(root, ["config", "core.fsmonitor", helper]);
+    runFixtureGit(root, ["config", "core.hooksPath", hooks]);
+    runFixtureGit(root, ["config", "diff.evil.command", helper]);
+    runFixtureGit(root, ["config", "diff.evil.textconv", helper]);
+    runFixtureGit(root, ["config", "filter.evil.clean", helper]);
+    runFixtureGit(root, ["config", "filter.evil.process", helper]);
+    runFixtureGit(root, ["config", "filter.evil.required", "true"]);
+    writeFileSync(
+      join(hooks, "post-index-change"),
+      `#!/bin/sh\ntouch "${marker}"\n`,
+    );
+    chmodSync(join(hooks, "post-index-change"), 0o755);
+    writeFileSync(tracked, "first changed value\n");
+    process.env.ARBITER_FORGE_ALLOWED_ROOTS_JSON = JSON.stringify([root]);
+
+    const first = inspectWorkspace({ workspaceRoots: [root] });
+    const firstSnapshot = first.workspaces[0]?.git;
+    expect(first.status).toBe("ready");
+    expect(firstSnapshot).toMatchObject({ dirty: true, contentBound: true });
+    expect(existsSync(marker)).toBe(false);
+
+    writeFileSync(tracked, "second changed value\n");
+    const second = inspectWorkspace({ workspaceRoots: [root] });
+    const secondSnapshot = second.workspaces[0]?.git;
+    expect(secondSnapshot).toMatchObject({ dirty: true, contentBound: true });
+    expect(secondSnapshot?.dirtyManifestHash).not.toBe(
+      firstSnapshot?.dirtyManifestHash,
+    );
+    expect(existsSync(marker)).toBe(false);
+  });
+
   it("detects a monorepo marker without recursive code scanning", () => {
     const root = mkdtempSync(join(tmpdir(), "arbiter-forge-monorepo-"));
     mkdirSync(join(root, "packages"));
@@ -95,3 +193,16 @@ describe("workspace inspection boundary", () => {
     expect(result.workspaces[0]?.detected.monorepo).toBe(true);
   });
 });
+
+function runFixtureGit(root: string, args: string[]): void {
+  const result = spawnSync("git", args, {
+    cwd: root,
+    encoding: "utf8",
+    shell: false,
+  });
+  if (result.status !== 0) {
+    throw new Error(
+      `git ${args.join(" ")} failed: ${result.stderr || result.stdout}`,
+    );
+  }
+}

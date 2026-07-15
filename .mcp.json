@@ -3,7 +3,8 @@
     "arbiter-forge": {
       "command": "node",
       "args": ["./dist/index.js"],
-      "cwd": "."
+      "cwd": ".",
+      "env_vars": ["ARBITER_FORGE_ALLOWED_ROOTS_JSON"]
     }
   }
 }

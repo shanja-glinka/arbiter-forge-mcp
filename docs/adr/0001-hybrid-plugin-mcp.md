@@ -43,7 +43,7 @@ The v1 MCP API contains exactly five tools:
 | `forge_implementation_task` | Render an arbiter task for implementation, independent falsification, correction, and fresh final verification.                                                  |
 | `forge_documentation_task`  | Render a documentation-authoring task that independently studies intent and implementation before an arbiter approves a normalized specification for the writer. |
 | `forge_blind_check_task`    | Render a true D1/D2/D3 documentation-versus-implementation audit with isolated inputs and explicit mismatch classes.                                             |
-| `validate_task`             | Validate a generated or edited prompt against its operation, risk, goal, strict-blind settings, optional expected hash, and terminal gates.                      |
+| `validate_task`             | Recompile the original typed request and validate only a ready, byte-identical generated prompt; edited text is diagnostics-only.                                |
 
 All tools are read-only, non-destructive, idempotent for the same versioned input, and
 closed-world. The three `forge_*` tools share one internal renderer and validation core; separate
@@ -60,7 +60,9 @@ Documentation authoring and blind auditing are related but distinct:
 - `forge_blind_check_task` audits existing documentation. D1 reconstructs the expected system from
   documentation, D2 reconstructs observed behavior from implementation, and D3 classifies matches,
   missing behavior, extra or forbidden behavior, semantic mismatch, ownership mismatch,
-  unverifiable claims, and open decisions.
+  unverifiable claims, and open decisions. D3 performs full-outer coverage of both inventories;
+  every D2-only observation is first an extra/forbidden behavior and receives a separate arbiter
+  disposition.
 
 If clean contexts and input allowlists cannot be demonstrated, the generated task must call the
 operation an independent review rather than a blind check.
@@ -74,6 +76,9 @@ operation an independent review rather than a blind check.
 - Every generated forge result includes deterministic `taskId`, `requestFingerprint`, `policyHash`,
   and `prompt.sha256` values. Selected source files have their own SHA-256 values when inspected or
   supplied.
+- `validate_task` receives that prompt, operation, original typed request, and expected hash. It
+  recompiles under current policy and grants `assurance: recompiled` only to a `ready`, byte-equal
+  result. Caller-supplied hashes alone are not provenance.
 - Tool names and required field semantics are stable within a protocol major version.
 - Additive optional fields and new warning codes may be introduced in v1. Removing fields,
   changing requiredness, or changing terminal semantics requires `/v2`.
@@ -96,7 +101,8 @@ The server follows these constraints:
 - repository content treated as untrusted data, never as instructions to execute;
 - no raw secrets, credentials, private keys, reusable auth state, or unnecessary PII in responses
   or logs;
-- Git access, if needed, restricted to allowlisted read-only subcommands invoked without a shell;
+- Git access restricted to allowlisted read-only subcommands invoked without a shell, inherited
+  `GIT_*`, global/system config, hooks, fsmonitor, filters, external diff, and textconv disabled;
 - protocol output written only to stdout and sanitized diagnostics only to stderr;
 - no LLM calls, agent scheduler, command runner, browser runner, goal mutation, Git mutation, or
   target-workspace writes.
