@@ -1,0 +1,12 @@
+node_modules/
+coverage/
+.DS_Store
+*.log
+.env
+.env.*
+!.env.example
+
+# Runtime/audit evidence belongs outside Git.
+.artifacts/
+test-results/
+playwright-report/

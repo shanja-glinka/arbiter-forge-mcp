@@ -1,0 +1,44 @@
+{
+  "name": "arbiter-forge-mcp",
+  "version": "0.1.0",
+  "description": "Deterministic MCP prompt forge for hard-arbiter implementation, documentation, and blind-check tasks.",
+  "private": true,
+  "license": "UNLICENSED",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "arbiter-forge-mcp": "dist/index.js"
+  },
+  "files": [
+    "dist/",
+    "docs/",
+    "skills/",
+    ".codex-plugin/",
+    ".mcp.json",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "esbuild src/index.ts --bundle --minify --platform=node --format=esm --target=node20 --outfile=dist/index.js --banner:js='#!/usr/bin/env node' && node scripts/normalize-bundle.mjs",
+    "check": "pnpm typecheck && pnpm format:check && pnpm test",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "start": "node dist/index.js",
+    "test": "pnpm build && vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.29.0",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "24.13.3",
+    "esbuild": "0.28.1",
+    "prettier": "3.9.5",
+    "typescript": "5.9.3",
+    "vitest": "4.1.10"
+  },
+  "packageManager": "pnpm@10.18.3"
+}
