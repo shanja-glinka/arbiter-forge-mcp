@@ -131,6 +131,84 @@ describe("bundled stdio MCP server", () => {
       expect(structured.prompt.text).toContain("Playwright");
       expect(structured.prompt.sha256).toMatch(/^[a-f0-9]{64}$/u);
 
+      const routedInput = {
+        objective: "Build and independently verify a browser pricing editor.",
+        riskSignals: ["browser_ui", "money_or_pricing"],
+        capabilities: {
+          agentIsolation: "supported",
+          modelSelection: "supported",
+          physicalWorktrees: "supported",
+          goalTool: "supported",
+          playwrightHarness: "available",
+          routeInventoryComplete: true,
+          availableAgentTypes: ["arbiter-forge-ui-claude"],
+          availableModels: [
+            {
+              provider: "openai",
+              model: "gpt-5.6-sol",
+              reasoningEfforts: ["low", "medium", "high"],
+            },
+            {
+              provider: "openai",
+              model: "gpt-5.6-terra",
+              reasoningEfforts: ["low", "medium", "high", "xhigh"],
+            },
+            {
+              provider: "openai",
+              model: "gpt-5.6-luna",
+              reasoningEfforts: ["low", "medium"],
+            },
+          ],
+        },
+      };
+      const routed = await client.callTool({
+        name: "forge_implementation_task",
+        arguments: routedInput,
+      });
+      expect(routed.isError).not.toBe(true);
+      const routedStructured = routed.structuredContent as {
+        status: string;
+        decisions: {
+          routingStatus: string;
+          routingPlanHash: string;
+          routingPlan: Array<{
+            role: string;
+            candidates: Array<{
+              agentType?: string;
+              availability: string;
+            }>;
+          }>;
+        };
+        prompt: { text: string; sha256: string };
+      };
+      expect(routedStructured.status).toBe("ready");
+      expect(routedStructured.decisions.routingStatus).toBe("selectable");
+      expect(routedStructured.decisions.routingPlanHash).toMatch(
+        /^[a-f0-9]{64}$/u,
+      );
+      expect(
+        routedStructured.decisions.routingPlan.find(
+          (entry) => entry.role === "frontend_worker",
+        )?.candidates[0],
+      ).toMatchObject({
+        agentType: "arbiter-forge-ui-claude",
+        availability: "available",
+      });
+
+      const routedValidation = await client.callTool({
+        name: "validate_task",
+        arguments: {
+          prompt: routedStructured.prompt.text,
+          operation: "implementation_task",
+          request: routedInput,
+          expectedPromptSha256: routedStructured.prompt.sha256,
+        },
+      });
+      expect(routedValidation.structuredContent).toMatchObject({
+        pass: true,
+        assurance: "recompiled",
+      });
+
       const invalidForge = await client.callTool({
         name: "forge_implementation_task",
         arguments: {

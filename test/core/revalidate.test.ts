@@ -147,4 +147,44 @@ describe("deterministic task revalidation", () => {
       forgeStatus: "invalid",
     });
   });
+
+  it("does not trust a rehashed model-route edit", () => {
+    const sourceRequest = implementationRequestSchema.parse({
+      objective: "Implement with a pinned builder preference.",
+      roleRouting: {
+        assignments: [
+          {
+            role: "implementation_worker",
+            candidates: [
+              {
+                provider: "openai",
+                model: "gpt-5.6-terra",
+                reasoningEffort: "medium",
+              },
+            ],
+          },
+        ],
+      },
+    });
+    const forged = compileImplementationTask(sourceRequest);
+    const edited = forged.prompt.text.replace(
+      "openai/gpt-5.6-terra@medium",
+      "openai/gpt-5.6-sol@max",
+    );
+    const result = revalidateTaskPrompt(
+      validateTaskRequestSchema.parse({
+        prompt: edited,
+        operation: "implementation_task",
+        request: sourceRequest,
+        expectedPromptSha256: sha256(edited),
+      }),
+    );
+
+    expect(edited).not.toBe(forged.prompt.text);
+    expect(result.pass).toBe(false);
+    expect(result.assurance).toBe("structural_only");
+    expect(result.blockingErrors).toContain(
+      "expectedPromptSha256 does not match the deterministic recompile.",
+    );
+  });
 });

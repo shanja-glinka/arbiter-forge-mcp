@@ -13,6 +13,9 @@ execution.
    keeps hashes free of timestamps, random IDs, and locale-dependent slugs.
 4. Add a compiler branch in `src/core/render.ts`. Reuse the hard-arbiter, artifact, correction, and
    terminal gates. Include only applicable policies.
+   - Extend applicable-role selection in `src/core/routing.ts` only for genuinely different work.
+     Reuse an existing logical role when ownership and evidence contracts match; do not add a role
+     for every file type.
 5. Add structural invariants in `src/core/validate.ts` and route the operation through deterministic
    revalidation in `src/core/revalidate.ts`. User-facing PASS requires a ready byte-identical
    recompile of the original typed request.
