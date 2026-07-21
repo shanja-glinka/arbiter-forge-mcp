@@ -1,15 +1,15 @@
 {
   "name": "arbiter-forge",
-  "version": "0.1.0",
-  "description": "Forge deterministic implementation, documentation, and blind-check orchestration tasks.",
+  "version": "0.2.0",
+  "description": "Forge deterministic multimodel implementation, documentation, and blind-check orchestration tasks.",
   "author": {
     "name": "shanja-glinka"
   },
   "skills": "./skills/",
   "interface": {
     "displayName": "Arbiter Forge",
-    "shortDescription": "Build hard-arbiter tasks with auditable evidence gates.",
-    "longDescription": "Arbiter Forge turns a normalized objective into a deterministic, self-contained orchestration prompt for implementation, documentation synthesis, or a strict documentation-versus-code blind check.",
+    "shortDescription": "Build multimodel arbiter tasks with auditable gates.",
+    "longDescription": "Arbiter Forge turns a normalized objective into a deterministic, self-contained orchestration prompt with role-oriented model/provider fallbacks for implementation, documentation synthesis, or a strict documentation-versus-code blind check.",
     "developerName": "shanja-glinka",
     "category": "Productivity",
     "capabilities": ["MCP tools", "Skills"],

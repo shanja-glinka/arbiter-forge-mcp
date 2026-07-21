@@ -31,7 +31,12 @@ describe("task compilers", () => {
       goal: "plain",
     });
     expect(result.prompt.text).toContain("hard arbiter and orchestrator");
+    expect(result.prompt.text).toContain(
+      "Do not call Arbiter Forge MCP during execution",
+    );
     expect(result.prompt.text).not.toContain("/goal");
+    expect(result.prompt.text).not.toContain("## Versioned policy appendix");
+    expect(result.prompt.text.length).toBeLessThan(7_000);
     expect(result.validation.blockingErrors).toEqual([]);
   });
 

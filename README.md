@@ -1,14 +1,16 @@
 # Arbiter Forge
 
 Arbiter Forge is a local, read-only MCP server and Codex plugin that turns a normalized objective
-into a deterministic orchestration task. It supports three workflows:
+into a deterministic orchestration task. It supports three workflows plus a cross-cutting routing
+contract:
 
 - implementation led by a hard root arbiter;
 - independent documentation synthesis from intent, code, and governance;
-- a strict D1/D2/D3 documentation-versus-code blind check.
+- a strict D1/D2/D3 documentation-versus-code blind check;
+- role-oriented model/provider routing with operator overrides and honest fallbacks.
 
 It deliberately does **not** execute the generated task. Codex remains responsible for semantic
-analysis, subagents, model selection, goal lifecycle, file changes, Playwright, tests, evidence
+analysis, subagent launch, actual model selection, goal lifecycle, file changes, Playwright, tests, evidence
 review, and the final verdict. This boundary keeps the useful parts of a detailed orchestration
 skill without building a second agent scheduler inside MCP.
 
@@ -55,7 +57,9 @@ Five read-only resources expose the packaged long-form policy assets:
 | `ui-playwright-method`           | `arbiter-forge://method/ui-playwright`           |
 | `model-goal-method`              | `arbiter-forge://method/model-goal`              |
 
-Every forge result contains `requestFingerprint`, `policyHash`, and `prompt.sha256`. Identical
+Generator 0.2.0 emits `requestFingerprint`, `policyHash`, `routingPlanHash`, a typed `routingPlan`,
+and `prompt.sha256` in every forge result. The routing fields are additive optional v1 response
+fields for client compatibility. Identical
 normalized v1 inputs produce identical output. The server performs no LLM, network, browser, Git
 mutation, goal mutation, or target-project write.
 
@@ -147,11 +151,23 @@ server is not also active.
 Ask Codex to use Arbiter Forge, or call the MCP sequence explicitly:
 
 1. `inspect_workspace` with absolute workspace and selected source paths when preflight is useful.
-2. Exactly one `forge_*` tool with the objective, source manifest, typed risk signals, and actual
-   host capabilities.
-3. `validate_task` with the original typed request and generated hash. Human edits are diagnostics
+2. For Standard/Critical implementation-task creation, use bounded read-only task/code analysts and
+   let the root arbiter normalize their distilled findings. Documentation/blind-check creation only
+   validates partitions and hashes; its compiled agents perform the semantic reads once.
+3. Exactly one `forge_*` tool with the objective, source manifest, typed risk signals, actual host
+   capabilities, and optional per-role routing overrides.
+4. `validate_task` with the original typed request and generated hash. Human edits are diagnostics
    only; re-forge to obtain a new PASS-eligible prompt.
-4. Execute the validated prompt only when execution was requested.
+5. Hand the validated prompt to a clean execution task when token economy matters. The executing
+   root records requested and actual routes but does not call Arbiter Forge again.
+
+Arbiter Forge is a creation-time compiler, not a runtime instruction service. Workers and auditors
+never query it. The creator pays once for inspection/compilation output; the execution task receives
+only the final prompt, and each subagent receives a smaller scope packet from the root. Re-forge only
+after an operator-approved change to the typed source request.
+
+The skill recognizes the invariant manifest in an already compiled prompt and switches directly to
+execution mode. It does not recursively call Forge or revalidate the task inside its correction loop.
 
 Example implementation input:
 
@@ -171,14 +187,34 @@ Example implementation input:
     "tenant_isolation",
     "money_or_pricing"
   ],
+  "implementationSurfaces": ["backend_or_shared", "frontend"],
   "goalMode": "plain",
   "modelRouting": "adaptive"
 }
 ```
 
 Model routes are preferences. The generated task records the actual route and degrades honestly if
-the host cannot select Sol, Terra, or Luna. `goalMode: "persistent_requested"` emits a `get_goal` →
+the host cannot select Sol, Terra, Luna, an operator custom agent, or an external adapter. The
+optimized default recommends starting the root on Sol and keeps that already-running root on
+arbitration; Forge never changes or fabricates its model. Terra handles bounded pre-Forge discovery
+and coding, Luna has a Terra fallback for test execution, and fresh Sol contexts handle material
+audits. A configured
+`arbiter-forge-ui-claude` custom agent is preferred for browser UI work, with Terra/Sol fallbacks;
+Forge never assumes that agent or provider exists. `goalMode: "persistent_requested"` emits a `get_goal` →
 conditional `create_goal` lifecycle, but never pre-emits `/goal` before state inspection.
+
+`diversityMode: "prefer"` is best effort. `diversityMode: "require"` is a runtime gate: the host must
+prove that the auditor's actual model/provider differs from the named worker role or refuse to
+dispatch that lane. Compact prompts use a concise contract and do not replay the full Standard or
+Critical orchestration appendix.
+
+Set `implementationSurfaces: ["frontend"]` for frontend-only work. Browser UI otherwise defaults to
+both frontend and backend/shared surfaces for backward compatibility. `onUnavailable: "block"`
+accepts exactly one required candidate; use `fallback` for an ordered candidate chain.
+
+For a complete walkthrough—including the split task-framing phase, Claude capability probe,
+typed `roleRouting`, validation, execution ledger, and single-model fallback—see
+[Multimodel task-creation scenario](docs/multimodel-task-scenario.md).
 
 ## Blind-check semantics
 

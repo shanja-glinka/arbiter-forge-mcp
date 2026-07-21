@@ -7,6 +7,8 @@ export interface PromptValidationInput {
   riskProfile: RiskProfile;
   riskSignals: readonly RiskSignal[];
   goalMode: "plain" | "persistent_requested";
+  modelRouting: "adaptive" | "omit";
+  routingPlanHash: string;
   requiredAudits: readonly string[];
   documentationBasis?: "current_aware" | "greenfield";
   strictBlindRequested: boolean;
@@ -50,6 +52,7 @@ export function validateTaskPrompt(
 
   validateInvariantManifest(prompt, request, blockingErrors);
   validateGoal(normativePrompt, request, blockingErrors);
+  validateRouting(normativePrompt, request, blockingErrors);
 
   requireText(
     normativePrompt,
@@ -74,6 +77,12 @@ export function validateTaskPrompt(
     "CORRECTION_REQUIRED",
     blockingErrors,
     "Correction-loop state is missing.",
+  );
+  requireText(
+    normativePrompt,
+    "Do not call Arbiter Forge MCP during execution",
+    blockingErrors,
+    "Runtime-to-compiler isolation is missing.",
   );
 
   if (
@@ -179,6 +188,7 @@ function validateInvariantManifest(
   requireManifestValue(values, "operation", request.operation, errors);
   requireManifestValue(values, "risk_profile", request.riskProfile, errors);
   requireManifestValue(values, "goal_mode", request.goalMode, errors);
+  requireManifestValue(values, "model_routing", request.modelRouting, errors);
   requireManifestValue(
     values,
     "documentation_basis",
@@ -220,10 +230,52 @@ function validateInvariantManifest(
     errors,
   );
 
-  for (const hashKey of ["request_fingerprint", "policy_hash"]) {
+  for (const hashKey of [
+    "request_fingerprint",
+    "policy_hash",
+    "routing_plan_hash",
+  ]) {
     if (!/^[a-f0-9]{64}$/u.test(values.get(hashKey) ?? "")) {
       errors.push(`Invariant manifest ${hashKey} must be a SHA-256 value.`);
     }
+  }
+  requireManifestValue(
+    values,
+    "routing_plan_hash",
+    request.routingPlanHash,
+    errors,
+  );
+}
+
+function validateRouting(
+  prompt: string,
+  request: PromptValidationInput,
+  errors: string[],
+): void {
+  if (request.modelRouting === "omit") {
+    if (prompt.includes("## Model routing contract")) {
+      errors.push(
+        "Model routing contract must be absent when routing is omitted.",
+      );
+    }
+    return;
+  }
+
+  for (const token of [
+    "## Model routing contract",
+    "requestedRoute",
+    "actualRoute",
+    "fallbackReason",
+    'fork_turns="none"',
+    'fork_turns="all"',
+    "not proof that a model was launched",
+  ]) {
+    requireText(
+      prompt,
+      token,
+      errors,
+      `Model routing contract is missing ${token}.`,
+    );
   }
 }
 

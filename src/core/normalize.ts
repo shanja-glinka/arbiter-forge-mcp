@@ -8,10 +8,12 @@ import {
 } from "node:path";
 import type {
   BlindCheckRequest,
+  CapabilityProbe,
   DocumentationRequest,
   ImplementationRequest,
   Requirement,
   RepositoryRef,
+  RoleRouting,
   SourceRef,
 } from "./schemas.js";
 
@@ -61,6 +63,11 @@ export function normalizeRequest(
       );
     }
   }
+  if (request.modelRouting === "omit" && request.roleRouting) {
+    blockingErrors.push(
+      "roleRouting cannot be supplied when modelRouting is omit",
+    );
+  }
 
   const repositories = [...request.repositories]
     .map((repository) => normalizeRepository(repository))
@@ -73,6 +80,12 @@ export function normalizeRequest(
           (right.order ?? Number.MAX_SAFE_INTEGER) ||
         left.id.localeCompare(right.id, "en"),
     );
+  const roleRouting = request.roleRouting
+    ? normalizeRoleRouting(request.roleRouting, blockingErrors)
+    : undefined;
+  const capabilities = request.capabilities
+    ? normalizeCapabilities(request.capabilities, blockingErrors)
+    : undefined;
 
   validateUniqueIds(repositories, "repository", blockingErrors);
   validateUniqueIds(sources, "source", blockingErrors);
@@ -83,6 +96,8 @@ export function normalizeRequest(
     ...(request.title ? { title: request.title.trim() } : {}),
     repositories,
     sources,
+    ...(roleRouting ? { roleRouting } : {}),
+    ...(capabilities ? { capabilities } : {}),
     nonGoals: uniqueSorted(request.nonGoals.map((value) => value.trim())),
     ...(request.context?.trim()
       ? { context: request.context.replace(/\r\n?/gu, "\n").trim() }
@@ -96,6 +111,11 @@ export function normalizeRequest(
   } as ForgeRequest;
 
   if ("requirements" in base) {
+    if (base.implementationSurfaces) {
+      base.implementationSurfaces = uniqueSorted(
+        base.implementationSurfaces,
+      ) as ImplementationRequest["implementationSurfaces"];
+    }
     base.requirements = normalizeRequirements(base.requirements);
     validateUniqueIds(base.requirements, "requirement", blockingErrors);
     base.ownershipRules = uniqueSorted(
@@ -197,6 +217,141 @@ export function normalizeRequest(
     blockingErrors: uniqueSorted(blockingErrors),
     missingMaterialInputs: uniqueSorted(missingMaterialInputs),
     warnings: uniqueSorted(warnings),
+  };
+}
+
+function normalizeRoleRouting(
+  roleRouting: RoleRouting,
+  blockingErrors: string[],
+): RoleRouting {
+  const seenRoles = new Set<string>();
+  const assignments = roleRouting.assignments
+    .map((assignment) => {
+      if (seenRoles.has(assignment.role)) {
+        blockingErrors.push(
+          `roleRouting contains duplicate assignment for ${assignment.role}`,
+        );
+      }
+      seenRoles.add(assignment.role);
+
+      const seenCandidates = new Set<string>();
+      const candidates = assignment.candidates.map((candidate) => {
+        const normalized = {
+          ...candidate,
+          ...(candidate.provider
+            ? { provider: candidate.provider.trim() }
+            : {}),
+          ...(candidate.model ? { model: candidate.model.trim() } : {}),
+        };
+        const identity = canonicalJson(normalized);
+        if (seenCandidates.has(identity)) {
+          blockingErrors.push(
+            `roleRouting ${assignment.role} contains a duplicate route candidate`,
+          );
+        }
+        seenCandidates.add(identity);
+        return normalized;
+      });
+      const preferDifferentModelFromRoles = uniqueSorted(
+        assignment.preferDifferentModelFromRoles,
+      ) as typeof assignment.preferDifferentModelFromRoles;
+      const preferDifferentProviderFromRoles = uniqueSorted(
+        assignment.preferDifferentProviderFromRoles,
+      ) as typeof assignment.preferDifferentProviderFromRoles;
+      if (
+        assignment.role === "root_arbiter" &&
+        candidates.some((candidate) => candidate.execution !== "root_session")
+      ) {
+        blockingErrors.push(
+          "roleRouting root_arbiter may describe only the existing root_session",
+        );
+      }
+      if (
+        preferDifferentModelFromRoles.includes(assignment.role) ||
+        preferDifferentProviderFromRoles.includes(assignment.role)
+      ) {
+        blockingErrors.push(
+          `roleRouting ${assignment.role} cannot require diversity from itself`,
+        );
+      }
+      if (
+        assignment.diversityMode === "require" &&
+        preferDifferentModelFromRoles.length === 0 &&
+        preferDifferentProviderFromRoles.length === 0
+      ) {
+        blockingErrors.push(
+          `roleRouting ${assignment.role} requires diversity but names no comparison role`,
+        );
+      }
+      return {
+        ...assignment,
+        candidates,
+        preferDifferentModelFromRoles,
+        preferDifferentProviderFromRoles,
+      };
+    })
+    .sort((left, right) => left.role.localeCompare(right.role, "en"));
+  return { assignments };
+}
+
+function normalizeCapabilities(
+  capabilities: CapabilityProbe,
+  blockingErrors: string[],
+): CapabilityProbe {
+  const seenModels = new Set<string>();
+  const availableModels = capabilities.availableModels
+    ?.map((model) => {
+      const normalized = {
+        ...model,
+        provider: model.provider.trim(),
+        model: model.model.trim(),
+        ...(model.reasoningEfforts
+          ? {
+              reasoningEfforts: uniqueSorted(
+                model.reasoningEfforts,
+              ) as typeof model.reasoningEfforts,
+            }
+          : {}),
+      };
+      const identity = `${normalized.provider}\u0000${normalized.model}`;
+      if (seenModels.has(identity)) {
+        blockingErrors.push(
+          `capabilities contains duplicate model route: ${normalized.provider}/${normalized.model}`,
+        );
+      }
+      seenModels.add(identity);
+      return normalized;
+    })
+    .sort(
+      (left, right) =>
+        left.provider.localeCompare(right.provider, "en") ||
+        left.model.localeCompare(right.model, "en"),
+    );
+
+  return {
+    ...capabilities,
+    ...(capabilities.currentRootRoute
+      ? {
+          currentRootRoute: {
+            ...capabilities.currentRootRoute,
+            provider: capabilities.currentRootRoute.provider.trim(),
+            model: capabilities.currentRootRoute.model.trim(),
+          },
+        }
+      : {}),
+    ...(availableModels ? { availableModels } : {}),
+    ...(capabilities.availableAgentTypes
+      ? {
+          availableAgentTypes: uniqueSorted(capabilities.availableAgentTypes),
+        }
+      : {}),
+    ...(capabilities.availableExternalAdapters
+      ? {
+          availableExternalAdapters: uniqueSorted(
+            capabilities.availableExternalAdapters,
+          ),
+        }
+      : {}),
   };
 }
 

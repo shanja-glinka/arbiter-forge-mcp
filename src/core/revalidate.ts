@@ -46,6 +46,8 @@ export function revalidateTaskPrompt(
     riskProfile: expected.decisions.riskProfile,
     riskSignals: sourceRequest.riskSignals,
     goalMode: sourceRequest.goalMode,
+    modelRouting: sourceRequest.modelRouting,
+    routingPlanHash: expected.decisions.routingPlanHash,
     requiredAudits: expected.decisions.requiredAudits,
     ...(request.operation === "documentation_task"
       ? {

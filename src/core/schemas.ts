@@ -1,7 +1,7 @@
 import { z } from "zod/v4";
 
 export const SCHEMA_VERSION = "arbiter-forge/v1" as const;
-export const GENERATOR_VERSION = "0.1.0" as const;
+export const GENERATOR_VERSION = "0.2.0" as const;
 
 export const riskSignalSchema = z.enum([
   "browser_ui",
@@ -42,6 +42,187 @@ const singleLineStringSchema = (max: number) =>
     (value) => !/[\u0000-\u001f\u007f]/u.test(value),
     "must not contain control characters or newlines",
   );
+
+const routeLabelSchema = (max: number) =>
+  singleLineStringSchema(max).refine(
+    (value) => !/[`|<>]/u.test(value),
+    "route labels must not contain Markdown or HTML delimiters",
+  );
+
+export const routingRoleSchema = z.enum([
+  "root_arbiter",
+  "task_discovery",
+  "implementation_analyst",
+  "implementation_worker",
+  "frontend_worker",
+  "test_runner",
+  "playwright_operator",
+  "acceptance_auditor",
+  "code_quality_auditor",
+  "blind_d1",
+  "blind_d2",
+  "blind_d3",
+  "debugger",
+  "documentation_author",
+  "cold_reader",
+]);
+
+export const reasoningEffortSchema = z.enum([
+  "inherit",
+  "none",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+  "ultra",
+]);
+
+export const routeExecutionSchema = z.enum([
+  "root_session",
+  "codex_subagent",
+  "inherited_subagent",
+  "codex_custom_agent",
+  "external_adapter",
+]);
+
+const roleRouteTargetShape = {
+  execution: routeExecutionSchema.default("codex_subagent"),
+  agentType: stableIdSchema(120).optional(),
+  adapter: stableIdSchema(120).optional(),
+  provider: routeLabelSchema(120).optional(),
+  model: routeLabelSchema(160).optional(),
+  reasoningEffort: reasoningEffortSchema.default("inherit"),
+};
+
+export const roleRouteTargetSchema = z
+  .strictObject(roleRouteTargetShape)
+  .superRefine((value, context) => {
+    if (value.execution === "codex_subagent" && !value.model) {
+      context.addIssue({
+        code: "custom",
+        path: ["model"],
+        message: "codex_subagent routes require model",
+      });
+    }
+    if (value.execution === "codex_custom_agent" && !value.agentType) {
+      context.addIssue({
+        code: "custom",
+        path: ["agentType"],
+        message: "codex_custom_agent routes require agentType",
+      });
+    }
+    if (value.execution === "external_adapter" && !value.adapter) {
+      context.addIssue({
+        code: "custom",
+        path: ["adapter"],
+        message: "external_adapter routes require adapter",
+      });
+    }
+    if (
+      (value.execution === "root_session" ||
+        value.execution === "codex_subagent") &&
+      (value.agentType || value.adapter)
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: `${value.execution} routes cannot declare agentType or adapter`,
+      });
+    }
+    if (value.execution === "root_session" && value.provider && !value.model) {
+      context.addIssue({
+        code: "custom",
+        path: ["model"],
+        message: "root_session provider requires an exact model",
+      });
+    }
+    if (value.execution === "inherited_subagent") {
+      if (value.agentType || value.adapter || value.provider || value.model) {
+        context.addIssue({
+          code: "custom",
+          message:
+            "inherited_subagent routes cannot claim an exact agent, adapter, provider, or model",
+        });
+      }
+      if (value.reasoningEffort !== "inherit") {
+        context.addIssue({
+          code: "custom",
+          path: ["reasoningEffort"],
+          message: "inherited_subagent routes must inherit reasoning effort",
+        });
+      }
+    }
+    if (
+      value.execution === "codex_custom_agent" ||
+      value.execution === "external_adapter"
+    ) {
+      if (
+        (value.execution === "codex_custom_agent" && value.adapter) ||
+        (value.execution === "external_adapter" && value.agentType)
+      ) {
+        context.addIssue({
+          code: "custom",
+          message: `${value.execution} cannot declare the other executor identity field`,
+        });
+      }
+      if (value.provider || value.model) {
+        context.addIssue({
+          code: "custom",
+          message: `${value.execution} identity is attested by its named configuration and cannot also claim an exact provider/model`,
+        });
+      }
+      if (value.reasoningEffort !== "inherit") {
+        context.addIssue({
+          code: "custom",
+          path: ["reasoningEffort"],
+          message: `${value.execution} routes must use the reasoning effort pinned by their named configuration`,
+        });
+      }
+    }
+  });
+
+export const roleRouteAssignmentSchema = z
+  .strictObject({
+    role: routingRoleSchema,
+    candidates: z.array(roleRouteTargetSchema).min(1).max(6),
+    onUnavailable: z.enum(["fallback", "block"]).default("fallback"),
+    diversityMode: z.enum(["prefer", "require"]).default("prefer"),
+    preferDifferentModelFromRoles: z
+      .array(routingRoleSchema)
+      .max(16)
+      .default([]),
+    preferDifferentProviderFromRoles: z
+      .array(routingRoleSchema)
+      .max(16)
+      .default([]),
+  })
+  .superRefine((value, context) => {
+    if (value.onUnavailable === "block" && value.candidates.length !== 1) {
+      context.addIssue({
+        code: "custom",
+        path: ["candidates"],
+        message:
+          "onUnavailable=block is an exact-route contract and requires one candidate",
+      });
+    }
+  });
+
+export const roleRoutingSchema = z.strictObject({
+  assignments: z.array(roleRouteAssignmentSchema).min(1).max(32),
+});
+
+export const availableModelSchema = z.strictObject({
+  provider: routeLabelSchema(120),
+  model: routeLabelSchema(160),
+  reasoningEfforts: z.array(reasoningEffortSchema).max(16).optional(),
+});
+
+export const currentRootRouteSchema = z.strictObject({
+  provider: routeLabelSchema(120),
+  model: routeLabelSchema(160),
+  reasoningEffort: reasoningEffortSchema,
+});
 
 export const repositorySchema = z.strictObject({
   id: stableIdSchema(80),
@@ -98,6 +279,11 @@ export const capabilitySchema = z.strictObject({
       "not_checked",
     ])
     .default("not_checked"),
+  routeInventoryComplete: z.boolean().optional(),
+  currentRootRoute: currentRootRouteSchema.optional(),
+  availableModels: z.array(availableModelSchema).max(128).optional(),
+  availableAgentTypes: z.array(stableIdSchema(120)).max(128).optional(),
+  availableExternalAdapters: z.array(stableIdSchema(120)).max(64).optional(),
 });
 
 const commonShape = {
@@ -121,6 +307,7 @@ const commonShape = {
     .default("prompt_only"),
   goalMode: z.enum(["plain", "persistent_requested"]).default("plain"),
   modelRouting: z.enum(["adaptive", "omit"]).default("adaptive"),
+  roleRouting: roleRoutingSchema.optional(),
   artifactRoot: singleLineStringSchema(4096).optional(),
   capabilities: capabilitySchema.optional(),
 };
@@ -156,6 +343,11 @@ const auditModeSchema = z.enum(["auto", "required", "off"]);
 
 export const implementationRequestSchema = z.strictObject({
   ...commonShape,
+  implementationSurfaces: z
+    .array(z.enum(["backend_or_shared", "frontend"]))
+    .min(1)
+    .max(2)
+    .optional(),
   requirements: z.array(requirementSchema).max(256).default([]),
   ownershipRules: z.array(nonBlankStringSchema(4000)).max(128).default([]),
   audits: z
@@ -261,6 +453,26 @@ export const validateTaskRequestSchema = z
     }
   });
 
+export const routingStatusSchema = z.enum([
+  "selectable",
+  "degraded",
+  "unknown",
+  "omitted",
+]);
+
+export const routingPlanEntrySchema = z.strictObject({
+  role: routingRoleSchema,
+  candidates: z.array(
+    roleRouteTargetSchema.safeExtend({
+      availability: z.enum(["available", "unavailable", "unknown"]),
+    }),
+  ),
+  onUnavailable: z.enum(["fallback", "block"]),
+  diversityMode: z.enum(["prefer", "require"]),
+  preferDifferentModelFromRoles: z.array(routingRoleSchema),
+  preferDifferentProviderFromRoles: z.array(routingRoleSchema),
+});
+
 export const forgeResultSchema = z.strictObject({
   schemaVersion: z.literal(SCHEMA_VERSION),
   generatorVersion: z.literal(GENERATOR_VERSION),
@@ -278,7 +490,12 @@ export const forgeResultSchema = z.strictObject({
     reasons: z.array(z.string()),
     requiredAudits: z.array(z.string()),
     goalMode: z.enum(["plain", "persistent_requested"]),
-    routingStatus: z.enum(["selectable", "degraded", "unknown", "omitted"]),
+    routingStatus: routingStatusSchema,
+    routingPlanHash: z
+      .string()
+      .regex(/^[a-f0-9]{64}$/u)
+      .optional(),
+    routingPlan: z.array(routingPlanEntrySchema).optional(),
     warnings: z.array(z.string()),
   }),
   prompt: z.strictObject({
@@ -388,9 +605,22 @@ export type RiskProfile = z.infer<typeof riskProfileSchema>;
 export type RepositoryRef = z.infer<typeof repositorySchema>;
 export type SourceRef = z.infer<typeof sourceSchema>;
 export type CapabilityProbe = z.infer<typeof capabilitySchema>;
+export type RoutingRole = z.infer<typeof routingRoleSchema>;
+export type ReasoningEffort = z.infer<typeof reasoningEffortSchema>;
+export type RoleRouteTarget = z.infer<typeof roleRouteTargetSchema>;
+export type RoleRouteAssignment = z.infer<typeof roleRouteAssignmentSchema>;
+export type RoleRouting = z.infer<typeof roleRoutingSchema>;
+export type RoutingStatus = z.infer<typeof routingStatusSchema>;
+export type RoutingPlanEntry = z.infer<typeof routingPlanEntrySchema>;
 export type Requirement = z.infer<typeof requirementSchema>;
 export type ImplementationRequest = z.infer<typeof implementationRequestSchema>;
 export type DocumentationRequest = z.infer<typeof documentationRequestSchema>;
 export type BlindCheckRequest = z.infer<typeof blindCheckRequestSchema>;
 export type ValidateTaskRequest = z.infer<typeof validateTaskRequestSchema>;
 export type ForgeResult = z.infer<typeof forgeResultSchema>;
+export type CompiledForgeResult = Omit<ForgeResult, "decisions"> & {
+  decisions: ForgeResult["decisions"] & {
+    routingPlanHash: string;
+    routingPlan: RoutingPlanEntry[];
+  };
+};

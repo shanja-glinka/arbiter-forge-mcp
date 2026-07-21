@@ -1,4 +1,4 @@
-import type { CapabilityProbe, RiskProfile, RiskSignal } from "./schemas.js";
+import type { RiskProfile, RiskSignal } from "./schemas.js";
 
 const CRITICAL_SIGNALS = new Set<RiskSignal>([
   "cross_service_flow",
@@ -62,21 +62,4 @@ export function classifyRisk(
   }
 
   return { profile, reasons };
-}
-
-export function routingStatus(
-  modelRouting: "adaptive" | "omit",
-  capabilities: CapabilityProbe | undefined,
-): "selectable" | "degraded" | "unknown" | "omitted" {
-  if (modelRouting === "omit") {
-    return "omitted";
-  }
-
-  if (!capabilities || capabilities.modelSelection === "unknown") {
-    return "unknown";
-  }
-
-  return capabilities.modelSelection === "supported"
-    ? "selectable"
-    : "degraded";
 }

@@ -109,9 +109,41 @@ The server follows these constraints:
 - no LLM calls, agent scheduler, command runner, browser runner, goal mutation, Git mutation, or
   target-workspace writes.
 
-Model identifiers are preferences supplied by policy or caller, not hard-coded capability enums.
-The server records degraded routing when the host cannot select a model; it never claims an actual
-assignment it cannot observe.
+## Role-oriented model routing
+
+The protocol keeps `modelRouting: adaptive | omit` for compatibility and adds optional
+`roleRouting.assignments`. Logical roles are stable enums; provider and model identifiers remain
+opaque policy/caller data. Each role carries ordered route candidates, fallback-or-block behavior,
+and optional constraints for a different model/provider from another role. `diversityMode: prefer`
+degrades explicitly; `require` becomes a runtime blocking gate against the actual route ledger.
+
+The built-in optimized policy is intentionally asymmetric: the operator starts the root on Sol when
+desired, the existing root owns arbitration, Terra owns pre-Forge discovery and implementation, and
+Luna is preferred only for mechanical test or browser execution with Terra fallback. UI work may
+prefer a named operator custom agent for Claude, but the Forge never assumes that agent, provider,
+model, or adapter exists. Pre-Forge task framing and on-demand debugging are not unconditional lanes
+in an implementation execution plan.
+
+Generator 0.2.0 exposes additive optional v1 response fields for the compiled plan, per-candidate
+availability derived only from caller-supplied capabilities, and a deterministic `routingPlanHash`.
+It does not expose an `actualRoute`; only the
+executing host can attest that after launch. A complete host inventory can prove a candidate
+unavailable. Direct Codex child routes require both spawn isolation and model selection support;
+custom/external routes attest only their named executor. Otherwise availability stays unknown. A
+proven-exhausted required lane is invalid; ordinary preferences degrade only through an explicit
+available candidate chain.
+
+This keeps provider credentials and global model configuration outside the MCP security boundary.
+Direct Anthropic Messages transport is not treated as a native Codex route; Claude requires an
+observed compatible custom provider/gateway or an external adapter with its own execution evidence.
+
+## Compilation and execution boundary
+
+Inspection, framing, Forge, and deterministic validation happen in the creation task. The compiled
+prompt is self-contained and may be handed to a new clean execution task so Sol does not inherit
+the creation transcript. The executing root and its workers/auditors never query Arbiter Forge for
+instructions. Runtime findings stay in the root ledger; only an operator-approved change to the
+typed source request creates a new compilation.
 
 ## Plugin and MCP Registration
 

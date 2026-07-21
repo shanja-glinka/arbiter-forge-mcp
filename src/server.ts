@@ -37,7 +37,7 @@ export function createServer(): McpServer {
     { name: "arbiter-forge", version: GENERATOR_VERSION },
     {
       instructions:
-        "Arbiter Forge generates and validates orchestration task specifications only. It does not execute tasks, modify projects, choose Codex worker models, manage goals, or claim audit PASS. Use forge_implementation_task for coding work, forge_documentation_task for independent documentation synthesis, and forge_blind_check_task for strict docs-versus-code comparison. Model routes are preferences; terminal PASS requires fresh independent evidence.",
+        "Arbiter Forge generates and validates orchestration task specifications only. It compiles role-oriented model/provider preferences and fallbacks, but does not execute tasks, launch agents, observe actual routes, modify projects, manage goals, or claim audit PASS. Use forge_implementation_task for coding work, forge_documentation_task for independent documentation synthesis, and forge_blind_check_task for strict docs-versus-code comparison. Runtime route attestations and terminal PASS require fresh host evidence.",
     },
   );
 
@@ -65,7 +65,7 @@ export function createServer(): McpServer {
     {
       title: "Forge implementation arbiter task",
       description:
-        "Compile a deterministic, self-contained implementation prompt with adaptive risk, ownership, independent audits, UI/GraphQL proof when applicable, correction loops, and hard terminal gates.",
+        "Compile a deterministic, self-contained implementation prompt with adaptive risk, per-role model/provider preferences and fallbacks, ownership, independent audits, UI/GraphQL proof when applicable, correction loops, and hard terminal gates.",
       inputSchema: implementationRequestSchema,
       outputSchema: implementationForgeResultSchema,
       annotations: READ_ONLY_ANNOTATIONS,

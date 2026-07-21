@@ -35,19 +35,29 @@ Forge inputs share these concepts:
   complete-manifest SHA-256;
 - operation-specific requirements, ownership constraints, discovery partitions, deliverables, and
   comparison dimensions;
+- optional implementation `implementationSurfaces`: `backend_or_shared`, `frontend`, or both;
 - typed risk signals rather than keyword-only classification;
-- host capabilities such as clean-context delegation, model selection, goal tools, and browser
-  tooling;
+- host capabilities such as clean-context delegation, model selection, a bounded available
+  model/custom-agent/external-adapter inventory, goal tools, and browser tooling;
 - `outputMode`: `prompt_only` by default or `resumable_package` when explicitly justified;
 - `goalMode`: `plain` by default or `persistent_requested` when host goal lifecycle is authorized;
 - `modelRouting`: `adaptive` by default or `omit`.
+- optional `roleRouting.assignments`: operator overrides for applicable logical roles. Each route
+  has ordered candidates, fallback-or-block semantics, optional cross-role model/provider
+  diversity constraints, and `diversityMode: prefer | require`.
+
+Capabilities may include an attested `currentRootRoute`, selectable model/effort inventory, custom
+agent types, and external adapters. Direct Codex routes are selectable only when both child
+isolation and model selection are supported. A model entry without an effort inventory cannot prove
+an exact requested effort. Custom agents attest only their named configuration; external adapters
+attest only the named adapter.
 
 Forge responses use a common envelope:
 
 ```json
 {
   "schemaVersion": "arbiter-forge/v1",
-  "generatorVersion": "0.1.0",
+  "generatorVersion": "0.2.0",
   "operation": "implementation_task",
   "status": "ready",
   "taskId": "task-0123456789ab",
@@ -59,6 +69,8 @@ Forge responses use a common envelope:
     "requiredAudits": [],
     "goalMode": "plain",
     "routingStatus": "unknown",
+    "routingPlanHash": "0123456789abcdef...",
+    "routingPlan": [],
     "warnings": []
   },
   "prompt": {
@@ -128,8 +140,45 @@ artifact isolation, and terminal rules. Browser or GraphQL proof is included onl
 is in scope. A missing required harness becomes an explicit setup lane or capability gap, never a
 fictional Playwright PASS.
 
-The task may express model capability preferences, but it must include an inherited-model fallback
-when the host cannot select a worker model. `goalMode: "persistent_requested"` emits instructions to
+The task emits a role-oriented preference plan containing only applicable execution roles. Task
+framing is a host/skill phase before Forge and is not repeated inside an implementation prompt.
+Defaults recommend a Sol root, keep the existing root session as sole arbiter, put implementation on
+Terra, use Sol for material audits, and use Luna with a Terra fallback for deterministic
+testing/browser execution. Browser UI work first probes an
+operator-defined `arbiter-forge-ui-claude` custom agent, but never assumes Claude is available.
+Operator assignments may replace a role with opaque provider/model IDs, a Codex custom agent, or an
+external adapter. The prompt binds this plan through `routingPlanHash` and requires a runtime ledger
+of requested versus actual routes. `diversityMode: require` blocks unless the actual route ledger
+proves the requested difference; `prefer` degrades explicitly. Any proven-exhausted candidate chain
+is invalid, while unknown availability must fail closed at runtime if probing finds no route.
+
+`onUnavailable: block` is an exact-route contract and accepts one candidate. `fallback` accepts an
+ordered chain. Implementation defaults to `backend_or_shared`; browser UI defaults to both surfaces
+for compatibility. An explicit `["frontend"]` omits the generic implementation writer while keeping
+frontend, testing, Playwright, and applicable audit lanes.
+
+The server does not launch a model or claim an actual assignment. Model/agent overrides require a
+non-full-history child (`fork_turns="none"` or a bounded positive count); a full-history fork inherits
+the root route. Claude requires an observed compatible custom provider/gateway or a separately
+attested external adapter. A native Anthropic Messages endpoint is not assumed to be a Codex model
+provider.
+
+The Forge lifecycle ends after deterministic validation. The compiled prompt is self-contained:
+the executing root, workers, and auditors must not call Arbiter Forge for runtime instructions.
+For token economy, a creator may hand only the final prompt to a clean execution task. Recompilation
+is valid only after an operator-approved change to the typed source request, not as a correction-loop
+step.
+
+The plugin detects the terminal Arbiter Forge invariant manifest. When the user supplies an already
+compiled contract for execution, the skill enters execution mode immediately and skips all MCP
+tools. This prevents the generated task from recursively compiling itself.
+
+For Standard/Critical task creation, the plugin may use bounded Terra discovery and code/ownership
+analysts before calling Forge. Sol receives distilled records and resolves only material ambiguity.
+These framing agents are not re-dispatched by the compiled implementation task. Debugging is also
+an on-demand escalation, not a default Critical lane.
+
+`goalMode: "persistent_requested"` emits instructions to
 call `get_goal`, reuse a compatible goal, conditionally call `create_goal`, stop on an incompatible
 unfinished goal, and recheck at fan-in. It never pre-emits `/goal` before state inspection. The MCP
 server never creates or updates a goal itself.
@@ -208,6 +257,8 @@ Validation covers at least:
 
 - deterministic request/policy recompile, ready state, byte identity, and expected-prompt hash;
 - a pre-emitted `/goal` command before goal preflight;
+- routing-plan hash binding, requested/actual route attestation, and the full-history-fork
+  prohibition when adaptive routing is enabled;
 - required hard-arbiter, snapshot freshness, artifact isolation, and correction-loop language;
 - testing/conventions gates for Standard and Critical implementation tasks;
 - physical isolation and blocking-requirement semantics for Critical implementation tasks;
@@ -233,14 +284,16 @@ structured output validation.
 
 ## Version Compatibility
 
-- Additive optional fields may be added within v1. Validation messages are human-readable strings,
-  not a stable error-code API.
+- Additive optional fields may be added within v1. `routingPlan` and `routingPlanHash` are optional
+  in the public v1 result schema and are always emitted by generator 0.2.0. Validation messages are
+  human-readable strings, not a stable error-code API.
 - Tool removals, required-field changes, changed hash canonicalization, or changed terminal semantics
   require `arbiter-forge/v2`.
 - Forge outputs include `policyHash` and `prompt.sha256`; generated content from another policy or
   prompt hash is not silently treated as equivalent.
 - Model names remain caller/policy data. Capability roles are stable; availability is discovered by
-  the host at execution time.
+  the host at execution time. Provider/model strings are opaque except for single-line rendering
+  safety constraints; Forge never writes credentials or global provider configuration.
 
 ## Registration Invariant
 
