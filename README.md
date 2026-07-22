@@ -352,4 +352,4 @@ Architecture and protocol details live in:
 
 ## License
 
-Public source repository without an open-source license yet. `UNLICENSED`.
+[MIT](LICENSE) — use, modify, and redistribute Arbiter Forge with attribution.
