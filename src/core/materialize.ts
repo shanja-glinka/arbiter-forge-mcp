@@ -42,7 +42,7 @@ import {
 } from "./schemas.js";
 import { sha256, withSingleTrailingNewline } from "./stable.js";
 
-const BUNDLE_SCHEMA_VERSION = "arbiter-forge-bundle/v1" as const;
+const BUNDLE_SCHEMA_VERSION = "arbiter-forge-bundle/v2" as const;
 const STORAGE_DIRECTORY = ".arbiter-forge";
 const IGNORE_FILE_CONTENT = "/.gitignore\n/tasks/\n";
 const SAFE_GIT_CONFIG_ARGS = [
@@ -88,6 +88,25 @@ export function materializeTaskBundle(
     };
   }
 
+  if (input.request.outputMode !== "resumable_package") {
+    return {
+      ...base,
+      status: "invalid",
+      errors: [
+        "materialization requires outputMode=resumable_package; prompt_only is a non-persistent compiler handoff",
+      ],
+    };
+  }
+  if (input.request.goalMode !== "persistent_requested") {
+    return {
+      ...base,
+      status: "invalid",
+      errors: [
+        "materialization requires goalMode=persistent_requested so every executing root owns a persistent terminal outcome",
+      ],
+    };
+  }
+
   const repository = input.request.repositories.find(
     (candidate) => candidate.id === input.targetRepositoryId,
   );
@@ -130,7 +149,7 @@ export function materializeTaskBundle(
       STORAGE_DIRECTORY,
       "tasks",
       compiled.taskId,
-      compiled.requestFingerprint.slice(0, 16),
+      `${compiled.requestFingerprint.slice(0, 16)}-b2`,
     ),
   );
   const bundleRoot = join(targetRoot, ...relativeRoot.split("/"));
@@ -310,8 +329,9 @@ export function materializeTaskBundle(
       (file) => file.relativePath === "manifest.json",
     )!.sha256;
     const launcherPrefix = `bash ${shellQuote(runPath)} ${shellQuote(runScriptHash)} ${shellQuote(compiled.prompt.sha256)} ${shellQuote(manifestHash)}`;
-    const nonInteractiveCommand = launcherPrefix;
-    const interactiveCommand = `${launcherPrefix} interactive`;
+    const verifyCommand = launcherPrefix;
+    const nonInteractiveCommand = `${launcherPrefix} manual-exec`;
+    const interactiveCommand = `${launcherPrefix} manual-interactive`;
 
     return {
       ...withTarget,
@@ -325,7 +345,7 @@ export function materializeTaskBundle(
       files: persistedFiles,
       launch: {
         workingDirectory: targetRoot,
-        recommendedCommand: nonInteractiveCommand,
+        recommendedCommand: verifyCommand,
         nonInteractiveCommand,
         interactiveCommand,
       },
@@ -417,6 +437,7 @@ function buildBundleFiles(
         policyHash: compiled.policyHash,
         routingPlanHash: compiled.decisions.routingPlanHash,
         promptSha256: compiled.prompt.sha256,
+        goalMode: compiled.decisions.goalMode,
         targetRepositoryId: input.targetRepositoryId,
         lifecycle: {
           compilation: "validated",
@@ -432,8 +453,11 @@ function buildBundleFiles(
         launch: {
           script: "run.sh",
           workingDirectory: "repository_root",
-          defaultMode: "non_interactive",
-          interactiveArgument: "interactive",
+          defaultMode: "verify_only",
+          creatorAgentExecution: "forbidden",
+          manualNonInteractiveArgument: "manual-exec",
+          manualInteractiveArgument: "manual-interactive",
+          approvalPolicy: "never",
           integrityArguments: ["run_sha256", "task_sha256", "manifest_sha256"],
         },
         files: [
@@ -495,21 +519,61 @@ This Arbiter Forge task bundle is materialized and validated, but **not launched
 - Local ignored path: \`${relativeRoot}\`
 - Execution-time Arbiter Forge MCP calls: forbidden
 
-## Launch
+## Execution options
 
-Run non-interactively from this bundle:
+The creator agent must **not** invoke \`run.sh\`, \`codex exec\`, or a nested interactive Codex
+session. Materialization selected and launched no route. For create/save-only requests, present both
+options below and stop. When execution was explicitly requested, follow only the matching route.
+
+### Codex App / new task
+
+Open a new Codex App task with the target repository as its working directory. Paste \`task.md\`,
+attach it, or instruct the new task to read its absolute path. The new root must verify prompt
+SHA-256 \`${compiled.prompt.sha256}\`, call \`get_goal\`, reuse a compatible active goal or create one
+only when none exists/the previous goal is \`complete\`. A \`blocked\` goal requires user-controlled
+resume/transition. Execute through fresh verification and terminal \`PASS\` or justified \`BLOCKED\`.
+A task is
+not launched until the host returns a real task/thread identity.
+
+### Continue with the current agent
+
+When the operator explicitly asked this same top-level agent to execute, it must transition directly
+into execution mode: read and directly compute/compare the SHA-256 of \`task.md\` with host file/hash
+tools (not even verify-only \`run.sh\`), perform goal preflight, and run the compiled contract
+to its terminal outcome. It must not start a nested Codex process and must not call Arbiter Forge
+again during execution.
+
+### Verify only
+
+The default script action checks the integrity anchor and exits without starting Codex:
 
 \`\`\`bash
 ./run.sh '${runScriptSha256}' '${compiled.prompt.sha256}' '${manifestSha256}'
 \`\`\`
 
-Open an interactive Codex CLI task instead:
+### Manual terminal fallback (operator only)
+
+These commands are for a human operator, never for the creator agent. They verify all hashes first.
+Non-interactive mode pins approval handling to \`never\`, so a command that needs approval fails
+instead of hanging without a response channel:
 
 \`\`\`bash
-./run.sh '${runScriptSha256}' '${compiled.prompt.sha256}' '${manifestSha256}' interactive
+./run.sh '${runScriptSha256}' '${compiled.prompt.sha256}' '${manifestSha256}' manual-exec
 \`\`\`
 
-The three hashes are an out-of-band integrity anchor returned by the materializer. The launcher verifies itself, \`task.md\`, and the complete \`manifest.json\` bytes before starting Codex. \`README.md\` is informational and its hash is returned by the materializer, but the launcher does not trust it as provenance. The bundle survives an OS reboot, but manual cleanup or \`git clean -fdx\` can remove it; it is not a committed archive.
+Interactive mode also pins approval handling and requires a real terminal:
+
+\`\`\`bash
+./run.sh '${runScriptSha256}' '${compiled.prompt.sha256}' '${manifestSha256}' manual-interactive
+\`\`\`
+
+Manual CLI cannot replace a missing goal mechanism. If goal preflight or updates are unavailable,
+execution must fail closed before implementation.
+
+The three hashes are an out-of-band integrity anchor returned by the materializer. The script
+verifies itself, \`task.md\`, and the complete \`manifest.json\` bytes before any operator launch.
+\`README.md\` is informational and is not a provenance trust anchor. The bundle survives an OS
+reboot, but manual cleanup or \`git clean -fdx\` can remove it; it is not a committed archive.
 `);
 }
 
@@ -523,17 +587,16 @@ TASK_FILE="$BUNDLE_DIR/task.md"
 MANIFEST_FILE="$BUNDLE_DIR/manifest.json"
 
 command -v node >/dev/null 2>&1 || { echo "node is required" >&2; exit 127; }
-command -v codex >/dev/null 2>&1 || { echo "codex is required" >&2; exit 127; }
 git -C "$TARGET_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1 || { echo "target is not a Git worktree" >&2; exit 2; }
 
 if [ "$#" -lt 3 ]; then
-  echo "usage: $0 <expected-run-sha256> <expected-task-sha256> <expected-manifest-sha256> [exec|interactive]" >&2
+  echo "usage: $0 <expected-run-sha256> <expected-task-sha256> <expected-manifest-sha256> [verify|manual-exec|manual-interactive]" >&2
   exit 64
 fi
 EXPECTED_RUN_HASH=$1
 EXPECTED_TASK_HASH=$2
 EXPECTED_MANIFEST_HASH=$3
-MODE=\${4:-exec}
+MODE=\${4:-verify}
 
 ACTUAL_RUN_HASH=$(node -e 'const fs=require("node:fs");const crypto=require("node:crypto");process.stdout.write(crypto.createHash("sha256").update(fs.readFileSync(process.argv[1])).digest("hex"));' "$0")
 ACTUAL_TASK_HASH=$(node -e 'const fs=require("node:fs");const crypto=require("node:crypto");process.stdout.write(crypto.createHash("sha256").update(fs.readFileSync(process.argv[1])).digest("hex"));' "$TASK_FILE")
@@ -551,14 +614,25 @@ MANIFEST_RUN_HASH=$(printf '%s\n' "$MANIFEST_HASHES" | sed -n '2p')
 [ "$MANIFEST_TASK_HASH" = "$EXPECTED_TASK_HASH" ] || { echo "manifest.json task.md SHA-256 does not match the materializer handoff" >&2; exit 3; }
 
 case "$MODE" in
-  exec)
-    exec codex exec --sandbox workspace-write -C "$TARGET_ROOT" - < "$TASK_FILE"
+  verify)
+    printf '%s\n' "Arbiter Forge bundle verified; Codex was not started."
+    printf '%s\n' "Task: $TASK_FILE"
     ;;
-  interactive)
-    exec codex -C "$TARGET_ROOT" "Execute the compiled Arbiter Forge task at $TASK_FILE. Verify task.md against manifest.json before work. Do not call Arbiter Forge MCP during execution."
+  manual-exec)
+    command -v codex >/dev/null 2>&1 || { echo "codex is required" >&2; exit 127; }
+    exec codex --ask-for-approval never exec --sandbox workspace-write -C "$TARGET_ROOT" - < "$TASK_FILE"
+    ;;
+  manual-interactive)
+    command -v codex >/dev/null 2>&1 || { echo "codex is required" >&2; exit 127; }
+    [ -t 0 ] && [ -t 1 ] || { echo "manual-interactive requires a human-controlled TTY" >&2; exit 69; }
+    exec codex --ask-for-approval never -C "$TARGET_ROOT" "Execute the compiled Arbiter Forge task at $TASK_FILE. Verify task.md against manifest.json, establish or reuse its persistent goal before work, continue to terminal PASS or justified BLOCKED, and do not call Arbiter Forge MCP during execution."
+    ;;
+  exec|interactive)
+    echo "legacy automatic launch mode '$MODE' is disabled; choose a host-native handoff or an explicit manual-* operator mode" >&2
+    exit 64
     ;;
   *)
-    echo "usage: $0 <expected-run-sha256> <expected-task-sha256> <expected-manifest-sha256> [exec|interactive]" >&2
+    echo "usage: $0 <expected-run-sha256> <expected-task-sha256> <expected-manifest-sha256> [verify|manual-exec|manual-interactive]" >&2
     exit 64
     ;;
 esac

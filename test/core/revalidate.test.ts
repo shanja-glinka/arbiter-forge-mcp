@@ -13,6 +13,29 @@ import {
 import { sha256 } from "../../src/core/stable.js";
 
 describe("deterministic task revalidation", () => {
+  it("rejects a persistent task whose terminal goal update contract was removed", () => {
+    const sourceRequest = implementationRequestSchema.parse({
+      objective: "Implement and verify the accepted contract.",
+      goalMode: "persistent_requested",
+    });
+    const forged = compileImplementationTask(sourceRequest);
+    const edited = forged.prompt.text.replaceAll("update_goal", "record_goal");
+    const result = revalidateTaskPrompt(
+      validateTaskRequestSchema.parse({
+        prompt: edited,
+        operation: "implementation_task",
+        request: sourceRequest,
+        expectedPromptSha256: sha256(edited),
+      }),
+    );
+
+    expect(result.pass).toBe(false);
+    expect(result.assurance).toBe("structural_only");
+    expect(result.blockingErrors).toContain(
+      "Persistent goal lifecycle is missing update_goal.",
+    );
+  });
+
   it("passes only a ready byte-identical deterministic recompile", () => {
     const sourceRequest = implementationRequestSchema.parse({
       objective: "Rename one internal helper safely.",

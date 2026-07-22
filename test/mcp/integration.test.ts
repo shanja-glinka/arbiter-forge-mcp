@@ -38,7 +38,7 @@ describe("bundled stdio MCP server", () => {
 
       expect(client.getServerVersion()).toEqual({
         name: "arbiter-forge",
-        version: "0.4.0",
+        version: "0.4.1",
       });
       expect(client.getInstructions()).toContain("never executes tasks");
       const tools = (await client.listTools()).tools;
@@ -174,10 +174,10 @@ describe("bundled stdio MCP server", () => {
           prompt: { sha256: string };
         },
       ).toMatchObject({
-        generatorVersion: "0.2.0",
+        generatorVersion: "0.3.0",
         prompt: {
           sha256:
-            "e96a19a10cb8455894a965daacdbd13a964e05b04f8800b8ce88a6e82dd8bf78",
+            "53a5fd59108dd608a4d675e7b0f645b24743a0fed5f666c7b277325bd6d0a2b3",
         },
       });
 
@@ -264,6 +264,7 @@ describe("bundled stdio MCP server", () => {
         objective: "Create a persistent runnable task bundle.",
         repositories: [{ id: "target", root: materializeRoot }],
         outputMode: "resumable_package",
+        goalMode: "persistent_requested",
       };
       const materializedForge = await client.callTool({
         name: "forge_implementation_task",
@@ -322,9 +323,22 @@ describe("bundled stdio MCP server", () => {
         expect(handoffText).toContain(`(<${encodedPath}>)`);
       }
       expect(handoffText).not.toContain("- Recommended: `");
-      expect(handoffText).toContain("Recommended:");
-      expect(handoffText).toContain("Non-interactive:");
-      expect(handoffText).toContain("Interactive:");
+      expect(handoffText).toContain("Execution options");
+      expect(handoffText).toContain(
+        "materialization selected and launched no route",
+      );
+      expect(handoffText).toContain("If the operator asked only to");
+      expect(handoffText).toContain("create/save, present both options");
+      expect(handoffText).toContain("Codex App / new task");
+      expect(handoffText).toContain("Continue with this same agent");
+      expect(handoffText).toContain("Manual terminal fallback");
+      expect(handoffText).toContain("Verify only");
+      expect(handoffText).toContain("approval requests return failure");
+      expect(handoffText).toContain(
+        "manual modes cannot replace a missing goal mechanism",
+      );
+      expect(handoffText).toContain("plan or dispatch ladder is not a goal");
+      expect(handoffText).not.toContain("Recommended:");
       expect(handoffText).toContain("Retention:");
 
       const invalidForge = await client.callTool({
@@ -368,6 +382,8 @@ describe("bundled stdio MCP server", () => {
         arguments: { objective: "Rename one helper." },
       });
       expect(prompt.messages[0]?.content.type).toBe("text");
+      expect(JSON.stringify(prompt.messages)).toContain("get_goal");
+      expect(JSON.stringify(prompt.messages)).toContain("update_goal");
 
       const greenfieldPrompt = await client.getPrompt({
         name: "forge-documentation-task",
@@ -379,6 +395,10 @@ describe("bundled stdio MCP server", () => {
         },
       });
       expect(greenfieldPrompt.messages[0]?.content.type).toBe("text");
+      expect(JSON.stringify(greenfieldPrompt.messages)).toContain("get_goal");
+      expect(JSON.stringify(greenfieldPrompt.messages)).toContain(
+        "update_goal",
+      );
       await expect(
         client.getPrompt({
           name: "forge-documentation-task",
@@ -404,6 +424,8 @@ describe("bundled stdio MCP server", () => {
         },
       });
       expect(blindPrompt.messages[0]?.content.type).toBe("text");
+      expect(JSON.stringify(blindPrompt.messages)).toContain("get_goal");
+      expect(JSON.stringify(blindPrompt.messages)).toContain("update_goal");
       await expect(
         client.getPrompt({
           name: "forge-blind-check-task",

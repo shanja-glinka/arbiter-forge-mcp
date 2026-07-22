@@ -112,20 +112,27 @@ decisions and evidence, not hidden reasoning.
 ## Goal ownership
 
 Generated task prompts do not pre-emit `/goal`, because that would mutate goal state before
-inspection. Perform goal preflight before calling `create_goal`:
+inspection. A plan, checklist, worker ladder, or audit ledger helps execute the task, but none is a
+persistent goal. Perform goal preflight before calling `create_goal`:
 
-1. Confirm that the user explicitly requested persistent goal execution and that a goal tool or host
-   goal launch mechanism actually exists.
-2. Inspect current goal state. If no goal exists, call `create_goal` once with the measurable
-   outcome.
+1. Confirm that persistent goal execution was explicitly requested or was normalized from the
+   operator's request for an execution-ready materialized task/current-agent execution, and that a
+   goal tool or host goal mechanism actually exists. This normalization compiles a future lifecycle;
+   save-only creation does not itself create or mutate a goal.
+2. Inspect current goal state. If no goal exists or the previous goal is `complete`, call
+   `create_goal` once with the measurable outcome.
 3. If a compatible active goal exists, reuse it and do not create a duplicate.
 4. If an incompatible unfinished goal exists, do not replace it. Report the conflict and request the
    user-controlled transition needed to proceed.
-5. If the task was already launched through a host goal command, treat that goal as active and do
+5. If the current goal is `blocked`, do not replace it. It requires a user-controlled resume or
+   transition before this root can create another goal.
+6. If the task was already launched through a host goal command, treat that goal as active and do
    not create another one.
 
-Without an explicit persistent-goal request, render a normal goal heading. If state inspection is
-unavailable, record the limitation and do not claim that duplicate/conflict preflight succeeded.
+Without an explicit persistent-goal request, render a normal goal heading only for a non-executing
+prompt-only handoff. Materialized bundles and any prompt that the current agent will execute require
+`persistent_requested`. If state inspection is unavailable at execution time, fail closed before
+implementation instead of silently degrading to checklist execution.
 
 Only the top-level user-facing root orchestrator owns goal lifecycle:
 
@@ -134,10 +141,13 @@ Only the top-level user-facing root orchestrator owns goal lifecycle:
    decision when the tool exists.
 3. Reconcile the active goal with the task snapshot and finding ledger; never let a stale or different
    goal inherit this task's PASS.
-4. Mark complete only after the integrated snapshot has fresh required audits, every blocking gate
-   passes, and no required work remains.
-5. Mark blocked only when the goal tool's repeated external-blocker threshold is satisfied and no
-   meaningful in-scope progress remains.
+4. Continue implementation, correction, and fresh verification until a terminal outcome. Saving a
+   bundle, dispatching workers, receiving worker completion, partial progress, or red tests is not
+   terminal.
+5. Call `update_goal` with `complete` only after the integrated snapshot has fresh required audits,
+   every blocking gate passes, and no required work remains.
+6. Call `update_goal` with `blocked` only when the goal tool's repeated external-blocker threshold
+   is satisfied and no meaningful in-scope progress remains.
 
 Workers and auditors never create or update competing goals. Red tests, worker failure, partial work,
 audit corrections, pauses, and budget pressure are not terminal goal blockers. Do not set a token

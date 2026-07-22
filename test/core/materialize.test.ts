@@ -57,22 +57,33 @@ describe("task bundle materialization", { timeout: 15_000 }, () => {
     expect(first.bundleRoot).toContain(
       ".arbiter-forge/tasks/persistent-handoff/",
     );
+    expect(first.bundleRoot).toMatch(/-b2$/u);
     expect(first.launch?.recommendedCommand).toContain("run.sh");
+    expect(first.launch?.recommendedCommand).not.toContain("manual-exec");
     expect(first.launch?.nonInteractiveCommand).toContain(
       first.files.find((file) => file.relativePath === "run.sh")!.sha256,
     );
+    expect(first.launch?.nonInteractiveCommand).toContain("manual-exec");
+    expect(first.launch?.interactiveCommand).toContain("manual-interactive");
     expect(first.launch?.nonInteractiveCommand).toContain(
       first.files.find((file) => file.relativePath === "manifest.json")!.sha256,
     );
     const taskPath = join(first.bundleRoot!, "task.md");
     const manifestPath = join(first.bundleRoot!, "manifest.json");
+    const readmePath = join(first.bundleRoot!, "README.md");
     const runPath = join(first.bundleRoot!, "run.sh");
     expect(readFileSync(taskPath, "utf8")).toBe(compiled.prompt.text);
     expect(sha256(readFileSync(taskPath))).toBe(compiled.prompt.sha256);
     expect(JSON.parse(readFileSync(manifestPath, "utf8"))).toMatchObject({
-      bundleSchemaVersion: "arbiter-forge-bundle/v1",
+      bundleSchemaVersion: "arbiter-forge-bundle/v2",
       promptSha256: compiled.prompt.sha256,
+      goalMode: "persistent_requested",
       targetRepositoryId: "target",
+      launch: {
+        defaultMode: "verify_only",
+        creatorAgentExecution: "forbidden",
+        approvalPolicy: "never",
+      },
       lifecycle: {
         compilation: "validated",
         materialization: "materialized",
@@ -80,6 +91,13 @@ describe("task bundle materialization", { timeout: 15_000 }, () => {
       },
     });
     expect(lstatSync(runPath).mode & 0o111).not.toBe(0);
+    const readme = readFileSync(readmePath, "utf8");
+    expect(readme).toContain("Materialization selected and launched no route");
+    expect(readme).toContain("create/save-only requests");
+    expect(readme).toContain("directly compute/compare the SHA-256");
+    expect(readme).toContain(
+      "Manual CLI cannot replace a missing goal mechanism",
+    );
     expect(spawnSync("sh", ["-n", runPath]).status).toBe(0);
     expect(first.files).toHaveLength(4);
     for (const file of first.files) {
@@ -105,6 +123,47 @@ describe("task bundle materialization", { timeout: 15_000 }, () => {
     expect(statSync(taskPath).mtimeMs).toBe(taskMtime);
     expect(readFileSync(taskPath, "utf8")).toBe(compiled.prompt.text);
   }, 15_000);
+
+  it.each([
+    {
+      label: "plain goal",
+      outputMode: "resumable_package" as const,
+      goalMode: "plain" as const,
+      expected: "goalMode=persistent_requested",
+    },
+    {
+      label: "prompt-only output",
+      outputMode: "prompt_only" as const,
+      goalMode: "persistent_requested" as const,
+      expected: "outputMode=resumable_package",
+    },
+  ])(
+    "rejects $label before creating materialization storage",
+    ({ outputMode, goalMode, expected }) => {
+      const root = createGitFixture("arbiter-forge-ineligible-");
+      const request = implementationRequestSchema.parse({
+        taskId: "ineligible-handoff",
+        objective: "Compile but do not materialize an ineligible handoff.",
+        repositories: [{ id: "target", root }],
+        outputMode,
+        goalMode,
+      });
+      const compiled = compileImplementationTask(request);
+      process.env.ARBITER_FORGE_ALLOWED_ROOTS_JSON = JSON.stringify([root]);
+
+      const result = materializeTaskBundle({
+        operation: "implementation_task",
+        request,
+        expectedPromptSha256: compiled.prompt.sha256,
+        targetRepositoryId: "target",
+      });
+
+      expect(result.status).toBe("invalid");
+      expect(result.materialized).toBe(false);
+      expect(result.errors.join("\n")).toContain(expected);
+      expect(existsSync(join(root, ".arbiter-forge"))).toBe(false);
+    },
+  );
 
   it("preserves visible pre-existing storage state and rolls back any denied scaffold", () => {
     const root = createGitFixture("arbiter-forge-visible-storage-");
@@ -305,8 +364,52 @@ describe("task bundle materialization", { timeout: 15_000 }, () => {
     ).toBe(0);
   }, 15_000);
 
-  it("launches codex exec with the exact task bytes through a stub", () => {
+  it("verifies by default without invoking codex", () => {
     const root = createGitFixture("arbiter-forge-launch-");
+    const request = taskRequest(root);
+    const compiled = compileImplementationTask(request);
+    process.env.ARBITER_FORGE_ALLOWED_ROOTS_JSON = JSON.stringify([root]);
+    const result = materializeTaskBundle({
+      operation: "implementation_task",
+      request,
+      expectedPromptSha256: compiled.prompt.sha256,
+      targetRepositoryId: "target",
+    });
+    const binRoot = join(root, "stub-bin");
+    const invocationMarker = join(root, "codex-invoked");
+    mkdirSync(binRoot);
+    const stubPath = join(binRoot, "codex");
+    writeFileSync(
+      stubPath,
+      `#!/bin/sh\ntouch ${JSON.stringify(invocationMarker)}\nexit 0\n`,
+    );
+    chmodSync(stubPath, 0o700);
+
+    const launched = spawnSync(
+      "sh",
+      [
+        join(result.bundleRoot!, "run.sh"),
+        ...launcherIntegrityArgs(result, compiled.prompt.sha256),
+      ],
+      {
+        cwd: root,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          PATH: `${binRoot}${pathDelimiter}${process.env.PATH ?? ""}`,
+        },
+      },
+    );
+
+    expect(launched.status).toBe(0);
+    expect(launched.stdout).toContain(
+      "Arbiter Forge bundle verified; Codex was not started.",
+    );
+    expect(existsSync(invocationMarker)).toBe(false);
+  }, 15_000);
+
+  it("uses approval-never and exact task bytes only in explicit manual-exec mode", () => {
+    const root = createGitFixture("arbiter-forge-manual-launch-");
     const request = taskRequest(root);
     const compiled = compileImplementationTask(request);
     process.env.ARBITER_FORGE_ALLOWED_ROOTS_JSON = JSON.stringify([root]);
@@ -332,6 +435,7 @@ describe("task bundle materialization", { timeout: 15_000 }, () => {
       [
         join(result.bundleRoot!, "run.sh"),
         ...launcherIntegrityArgs(result, compiled.prompt.sha256),
+        "manual-exec",
       ],
       {
         cwd: root,
@@ -347,6 +451,8 @@ describe("task bundle materialization", { timeout: 15_000 }, () => {
 
     expect(launched.status).toBe(0);
     expect(readFileSync(argsPath, "utf8").split("\n").filter(Boolean)).toEqual([
+      "--ask-for-approval",
+      "never",
       "exec",
       "--sandbox",
       "workspace-write",
@@ -356,6 +462,64 @@ describe("task bundle materialization", { timeout: 15_000 }, () => {
     ]);
     expect(readFileSync(stdinPath, "utf8")).toBe(compiled.prompt.text);
   }, 15_000);
+
+  it.each([
+    { mode: "exec", expectedStatus: 64, expected: "legacy automatic launch" },
+    {
+      mode: "interactive",
+      expectedStatus: 64,
+      expected: "legacy automatic launch",
+    },
+    {
+      mode: "manual-interactive",
+      expectedStatus: 69,
+      expected: "human-controlled TTY",
+    },
+  ])(
+    "fails closed for non-operator $mode mode",
+    ({ mode, expectedStatus, expected }) => {
+      const root = createGitFixture("arbiter-forge-refused-launch-");
+      const request = taskRequest(root);
+      const compiled = compileImplementationTask(request);
+      process.env.ARBITER_FORGE_ALLOWED_ROOTS_JSON = JSON.stringify([root]);
+      const result = materializeTaskBundle({
+        operation: "implementation_task",
+        request,
+        expectedPromptSha256: compiled.prompt.sha256,
+        targetRepositoryId: "target",
+      });
+      const binRoot = join(root, "stub-bin");
+      const invocationMarker = join(root, "codex-invoked");
+      mkdirSync(binRoot);
+      const stubPath = join(binRoot, "codex");
+      writeFileSync(
+        stubPath,
+        `#!/bin/sh\ntouch ${JSON.stringify(invocationMarker)}\nexit 0\n`,
+      );
+      chmodSync(stubPath, 0o700);
+
+      const launched = spawnSync(
+        "sh",
+        [
+          join(result.bundleRoot!, "run.sh"),
+          ...launcherIntegrityArgs(result, compiled.prompt.sha256),
+          mode,
+        ],
+        {
+          cwd: root,
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            PATH: `${binRoot}${pathDelimiter}${process.env.PATH ?? ""}`,
+          },
+        },
+      );
+
+      expect(launched.status).toBe(expectedStatus);
+      expect(launched.stderr).toContain(expected);
+      expect(existsSync(invocationMarker)).toBe(false);
+    },
+  );
 
   it("rejects a tampered task before invoking codex", () => {
     const root = createGitFixture("arbiter-forge-tampered-launch-");
@@ -580,6 +744,7 @@ function taskRequest(root: string) {
     objective: "Implement and independently verify the accepted behavior.",
     repositories: [{ id: "target", root }],
     outputMode: "resumable_package",
+    goalMode: "persistent_requested",
   });
 }
 

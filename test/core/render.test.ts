@@ -47,6 +47,7 @@ describe("task compilers", () => {
       objective: "Compile a runnable package.",
       repositories: [{ id: "target", root: "/tmp/target" }],
       outputMode: "resumable_package",
+      goalMode: "persistent_requested",
     });
 
     const first = compileImplementationTask(request);
@@ -64,7 +65,24 @@ describe("task compilers", () => {
     expect(first).not.toHaveProperty("handoff");
   });
 
-  it("retains the v0.2 compiler bytes while the server evolves independently", () => {
+  it("refuses to emit resumable package bytes without a persistent goal", () => {
+    const request = implementationRequestSchema.parse({
+      taskId: "plain-resumable",
+      objective: "Attempt a resumable task without goal ownership.",
+      outputMode: "resumable_package",
+      goalMode: "plain",
+    });
+
+    const result = compileImplementationTask(request);
+
+    expect(result.status).toBe("invalid");
+    expect(result.validation.blockingErrors).toContain(
+      "outputMode=resumable_package requires goalMode=persistent_requested; plain is only valid for a non-executing prompt_only handoff",
+    );
+    expect(result).not.toHaveProperty("package");
+  });
+
+  it("pins the v0.3 compiler bytes after goal lifecycle hardening", () => {
     const result = compileImplementationTask(
       implementationRequestSchema.parse({
         taskId: "compat-probe",
@@ -73,9 +91,9 @@ describe("task compilers", () => {
       }),
     );
 
-    expect(result.generatorVersion).toBe("0.2.0");
+    expect(result.generatorVersion).toBe("0.3.0");
     expect(result.prompt.sha256).toBe(
-      "e96a19a10cb8455894a965daacdbd13a964e05b04f8800b8ce88a6e82dd8bf78",
+      "53a5fd59108dd608a4d675e7b0f645b24743a0fed5f666c7b277325bd6d0a2b3",
     );
     expect(result).not.toHaveProperty("handoff");
   });
@@ -140,8 +158,17 @@ describe("task compilers", () => {
     expect(result.prompt.text).toContain("get_goal");
     expect(result.prompt.text).toContain("create_goal");
     expect(result.prompt.text).toContain("compatible active goal");
-    expect(result.prompt.text).toContain("incompatible unfinished goal");
+    expect(result.prompt.text).toContain(
+      "incompatible unfinished or `blocked` goal",
+    );
     expect(result.prompt.text).toContain("every major fan-in");
+    expect(result.prompt.text).toContain("update_goal");
+    expect(result.prompt.text).toContain("plan, checklist, or dispatch ladder");
+    expect(result.prompt.text).toContain("previous goal is `complete`");
+    expect(result.prompt.text).toContain("`blocked` goal");
+    expect(result.prompt.text).toContain(
+      "continue implementation, correction, and fresh verification",
+    );
     expect(result.status).toBe("ready");
   });
 

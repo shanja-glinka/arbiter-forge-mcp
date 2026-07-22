@@ -1,11 +1,11 @@
 import { z } from "zod/v4";
 
 export const SCHEMA_VERSION = "arbiter-forge/v1" as const;
-export const PACKAGE_VERSION = "0.4.0" as const;
-export const MATERIALIZER_VERSION = "0.3.0" as const;
-// The compiler output remains byte/schema compatible with v0.2.0. The package
-// and materializer can evolve without pretending the deterministic generator changed.
-export const GENERATOR_VERSION = "0.2.0" as const;
+export const PACKAGE_VERSION = "0.4.1" as const;
+export const MATERIALIZER_VERSION = "0.4.0" as const;
+// Generator 0.3.0 strengthens persistent-goal execution without changing the
+// strict arbiter-forge/v1 request/response envelope.
+export const GENERATOR_VERSION = "0.3.0" as const;
 
 export const forgeOperationSchema = z.enum([
   "implementation_task",

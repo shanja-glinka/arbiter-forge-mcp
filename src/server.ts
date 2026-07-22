@@ -47,7 +47,7 @@ export function createServer(): McpServer {
     { name: "arbiter-forge", version: PACKAGE_VERSION },
     {
       instructions:
-        "Arbiter Forge compiles and validates orchestration task specifications, then can materialize compiler-owned bytes as a persistent ignored bundle inside an allowlisted target repository. forge status=ready means compiled, not created. When the operator asks to create a task, call materialize_task_bundle and claim saved/created only for status=written or unchanged. Materialization is creation-time only: the server never executes tasks, launches agents, observes actual routes, manages goals, or claims audit PASS, and execution agents must not call it. Use forge_implementation_task for coding work, forge_documentation_task for independent documentation synthesis, and forge_blind_check_task for strict docs-versus-code comparison.",
+        "Arbiter Forge compiles and validates orchestration task specifications, then can materialize compiler-owned bytes as a persistent ignored bundle inside an allowlisted target repository. forge status=ready means compiled, not created. When the operator asks to create a task, call materialize_task_bundle with outputMode=resumable_package and goalMode=persistent_requested; claim saved/created only for status=written or unchanged. After creation, explicitly offer a host-native Codex App task or same-agent execution. A creator agent must never invoke run.sh, codex exec, or a nested Codex session. Materialization is creation-time only: the server never executes tasks, launches agents, observes actual routes, manages goals, or claims audit PASS, and execution agents must not call it. Use forge_implementation_task for coding work, forge_documentation_task for independent documentation synthesis, and forge_blind_check_task for strict docs-versus-code comparison.",
     },
   );
 
@@ -144,7 +144,7 @@ export function createServer(): McpServer {
     {
       title: "Materialize a validated Arbiter Forge task bundle",
       description:
-        "Recompile and validate the original typed request, then atomically save only compiler-produced task bytes under <target-repository>/.arbiter-forge/tasks/. Proves Git-ignore, refuses conflicts and symlink escapes, and returns exact launch commands without starting Codex.",
+        "Recompile and validate a persistent-goal resumable request, then atomically save only compiler-produced task bytes under <target-repository>/.arbiter-forge/tasks/. Proves Git-ignore, refuses conflicts and symlink escapes, and returns Codex App, same-agent, verify-only, and operator-only manual handoff instructions without starting Codex.",
       inputSchema: materializeTaskRequestSchema,
       outputSchema: materializeTaskResultSchema,
       annotations: MATERIALIZE_ANNOTATIONS,
@@ -176,6 +176,9 @@ function formatMaterializationHandoff(
     (file) =>
       `- [${file.relativePath}](<${escapeMarkdownLinkTarget(file.absolutePath)}>) — SHA-256 \`${file.sha256}\``,
   );
+  const taskPath = result.files.find(
+    (file) => file.relativePath === "task.md",
+  )!.absolutePath;
   return `Task bundle materialized, but not launched.
 
 - Status: \`${result.status}\`
@@ -187,16 +190,43 @@ function formatMaterializationHandoff(
 Files:
 ${fileLines.join("\n")}
 
-Launch commands:
+Execution options: materialization selected and launched no route. If the operator asked only to
+create/save, present both options below and stop. If execution was explicit, follow only the
+matching route. The creator agent must not invoke \`run.sh\`, \`codex exec\`, or a nested Codex
+session.
 
-Recommended:
+Codex App / new task:
+
+- Create a new Codex App task with working directory ${markdownCodeSpan(result.launch.workingDirectory)}.
+- Paste/attach ${markdownCodeSpan(taskPath)}, or tell the new task to read that exact absolute path.
+- The new root must verify SHA-256 \`${result.validation.promptSha256}\`, call \`get_goal\`, reuse
+  a compatible active goal or create one only when none exists/the previous goal is \`complete\`.
+  A \`blocked\` goal requires user-controlled resume/transition. Continue until fresh terminal
+  \`PASS\` or justified
+  \`BLOCKED\`. A plan or dispatch ladder is not a goal.
+- Claim \`launched\` only after the host returns a real task/thread identity.
+
+Continue with this same agent:
+
+- If the operator explicitly requested execution here, do not stop at this handoff. Verify and read
+  ${markdownCodeSpan(taskPath)} directly with host file/hash tools (not even verify-only \`run.sh\`),
+  enter compiled execution mode without another Forge call,
+  establish/reuse the persistent goal, execute corrections and fresh audits, then update the goal
+  only at the terminal outcome. Never start a nested Codex process.
+
+Manual terminal fallback (human operator only; creator agents must not run these):
+
+Verify only; this exits without starting Codex:
+
 ${markdownShellBlock(result.launch.recommendedCommand)}
 
-Non-interactive:
+Fail-closed non-interactive launch (approval requests return failure instead of waiting):
 ${markdownShellBlock(result.launch.nonInteractiveCommand)}
 
-Interactive:
+Human-controlled interactive launch:
 ${markdownShellBlock(result.launch.interactiveCommand)}
+These manual modes cannot replace a missing goal mechanism; without goal preflight and updates,
+execution must fail closed before implementation.
 
 Retention: ${result.warnings.join(" ")}`;
 }
@@ -253,7 +283,9 @@ function registerPrompts(server: McpServer): void {
         persistentGoal: z
           .enum(["no", "yes"])
           .optional()
-          .describe("Request host goal lifecycle; defaults to no."),
+          .describe(
+            "Request host goal lifecycle; executable prompt defaults to yes.",
+          ),
       },
     },
     ({ objective, riskSignals, persistentGoal }) => {
@@ -261,7 +293,7 @@ function registerPrompts(server: McpServer): void {
         implementationRequestSchema.parse({
           objective,
           riskSignals: parseCommaSeparated(riskSignals),
-          goalMode: persistentGoal === "yes" ? "persistent_requested" : "plain",
+          goalMode: persistentGoal === "no" ? "plain" : "persistent_requested",
         }),
       );
       return {
@@ -345,6 +377,7 @@ function registerPrompts(server: McpServer): void {
       const result = compileDocumentationTask(
         documentationRequestSchema.parse({
           objective,
+          goalMode: "persistent_requested",
           targetState,
           documentationBasis,
           sources: [
@@ -416,6 +449,7 @@ function registerPrompts(server: McpServer): void {
       const result = compileBlindCheckTask(
         blindCheckRequestSchema.parse({
           objective,
+          goalMode: "persistent_requested",
           sources: [
             {
               id: "documentation",

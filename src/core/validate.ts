@@ -293,9 +293,14 @@ function validateGoal(
     for (const token of [
       "get_goal",
       "create_goal",
+      "update_goal",
       "Before any `create_goal` operation",
       "compatible active goal",
-      "incompatible unfinished goal",
+      "incompatible unfinished or `blocked` goal",
+      "plan, checklist, or dispatch ladder",
+      "previous goal is `complete`",
+      "`blocked` goal",
+      "continue implementation, correction, and fresh verification",
       "every major fan-in",
     ]) {
       requireText(

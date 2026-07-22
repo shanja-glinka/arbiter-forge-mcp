@@ -16,8 +16,10 @@ bounded analysis or implementation
   -> fresh verification on one identified snapshot
 ```
 
-The server must not add auditors, worktrees, browser runs, model preferences, or persistent goals
-unless the supplied risk and capability inputs make them applicable.
+The server must not add auditors, worktrees, browser runs, or model preferences unless the
+supplied risk and capability inputs make them applicable. A non-executing `prompt_only` request may
+remain `plain`; every `resumable_package` accepted by the materializer is explicitly
+`persistent_requested` so an executing root owns a terminal outcome rather than a task ladder.
 
 ## Common Contract
 
@@ -40,7 +42,8 @@ Forge inputs share these concepts:
 - host capabilities such as clean-context delegation, model selection, a bounded available
   model/custom-agent/external-adapter inventory, goal tools, and browser tooling;
 - `outputMode`: `prompt_only` by default or `resumable_package` when explicitly justified;
-- `goalMode`: `plain` by default or `persistent_requested` when host goal lifecycle is authorized;
+- `goalMode`: `plain` for non-executing prompt-only output or `persistent_requested` for execution;
+  materialization requires the latter combination;
 - `modelRouting`: `adaptive` by default or `omit`.
 - optional `roleRouting.assignments`: operator overrides for applicable logical roles. Each route
   has ordered candidates, fallback-or-block semantics, optional cross-role model/provider
@@ -57,7 +60,7 @@ Forge responses use a common envelope:
 ```json
 {
   "schemaVersion": "arbiter-forge/v1",
-  "generatorVersion": "0.2.0",
+  "generatorVersion": "0.3.0",
   "operation": "implementation_task",
   "status": "ready",
   "taskId": "task-0123456789ab",
@@ -181,10 +184,15 @@ analysts before calling Forge. Sol receives distilled records and resolves only 
 These framing agents are not re-dispatched by the compiled implementation task. Debugging is also
 an on-demand escalation, not a default Critical lane.
 
-`goalMode: "persistent_requested"` emits instructions to
-call `get_goal`, reuse a compatible goal, conditionally call `create_goal`, stop on an incompatible
-unfinished goal, and recheck at fan-in. It never pre-emits `/goal` before state inspection. The MCP
-server never creates or updates a goal itself.
+`goalMode: "persistent_requested"` emits instructions to call `get_goal`, reuse a compatible goal,
+call `create_goal` only when no goal exists or the previous goal is `complete`, stop on an
+incompatible unfinished goal, and require user-controlled resume/transition for a `blocked` goal.
+It rechecks goal state at fan-in.
+The executing root retains responsibility through implementation, correction, fresh verification,
+and terminal `update_goal`; constructing a plan or dispatch ladder does not satisfy the contract.
+It never pre-emits `/goal` before state inspection. The MCP server never creates or updates a goal
+itself. `goalMode: "plain"` is valid only for non-executing `outputMode: "prompt_only"`; it cannot be
+materialized.
 
 ## `forge_documentation_task`
 
@@ -279,7 +287,8 @@ structured output validation.
 
 ## `materialize_task_bundle`
 
-Purpose: finish the creation handoff by saving a validated runnable bundle without executing it.
+Purpose: finish the creation handoff by saving a validated persistent-goal bundle without
+executing it.
 
 Inputs are the original typed `request`, matching `operation`, Forge `expectedPromptSha256`, and an
 explicit `targetRepositoryId` from `request.repositories`. The tool does not accept arbitrary file
@@ -289,20 +298,27 @@ Its result embeds the validation report, so a normal create/save flow does not c
 `validate_task` immediately beforehand; that separate tool remains the prompt-only and diagnostic
 path.
 
+Materialization additionally requires the source request to contain both
+`outputMode: "resumable_package"` and `goalMode: "persistent_requested"`. A plain prompt can be
+compiled and validated for non-executing use, but it cannot become a runnable handoff. This gate
+binds the resulting task to goal preflight and a terminal result rather than merely to a sequence of
+steps.
+
 The destination is fixed and content-addressed:
 
 ```text
-<target-repository>/.arbiter-forge/tasks/<task-id>/<request-fingerprint-prefix>/
+<target-repository>/.arbiter-forge/tasks/<task-id>/<request-fingerprint-prefix>-b2/
 ```
 
 The bundle contains:
 
 - `task.md`: the exact compiler prompt bytes;
-- `manifest.json`: `arbiter-forge-bundle/v1` provenance, lifecycle, hashes, storage, and launch data;
+- `manifest.json`: `arbiter-forge-bundle/v2` provenance, persistent-goal mode, lifecycle, hashes,
+  storage, and execution-handoff data;
 - `README.md`: local handoff and retention instructions;
-- `run.sh`: a non-mutating launcher that requires materializer-returned hashes and verifies itself,
-  `task.md`, and the complete `manifest.json` bytes before starting Codex. `README.md` is
-  informational and is not a launcher trust anchor.
+- `run.sh`: a non-mutating integrity verifier by default. It requires materializer-returned hashes
+  and verifies itself, `task.md`, and the complete `manifest.json` bytes. `README.md` is
+  informational and is not a trust anchor.
 
 Before writing, the tool canonicalizes the declared repository, Git root, absolute per-worktree Git
 directory, and absolute Git common directory against `ARBITER_FORGE_ALLOWED_ROOTS_JSON`; neutralizes
@@ -318,8 +334,28 @@ blindly deleted.
 
 Statuses are `written`, `unchanged`, `invalid`, `denied`, `not_ignored`, or `conflict`. Only
 `written` and `unchanged` set `materialized: true`. The structured result returns absolute file
-paths, hashes, target working directory, ignore proof command, and exact interactive and
-non-interactive launch commands. The operation never launches Codex.
+paths, hashes, target working directory, ignore proof command, a verify-only recommended command,
+and explicit human-only manual commands. The operation never launches Codex.
+
+Every successful handoff must explain two primary execution routes:
+
+1. **Codex App / new task:** create a host-native task rooted at the target repository and give its
+   root the exact `task.md` bytes or absolute path. Launch is proven only by a real host task/thread
+   identity.
+2. **Same top-level agent:** when the operator requested execution in the current task, the root
+   reads `task.md` directly and transitions to execution without another Forge call or a nested
+   Codex process.
+
+In both routes, the executing root verifies the prompt hash, calls `get_goal`, establishes or reuses
+a compatible persistent goal, and retains ownership through correction, fresh verification, and
+terminal `update_goal`. An incompatible unfinished goal blocks execution. The creator agent must
+never invoke `run.sh`, `codex exec`, or a nested interactive Codex session.
+
+The default `run.sh` mode verifies the three out-of-band hashes and exits without starting Codex.
+`manual-exec` and `manual-interactive` are fallback modes for a human operator only. Both pass
+approval policy `never`, so an operation requiring approval fails rather than waiting on a missing
+response channel; `manual-interactive` also requires a real TTY. Legacy `exec` and `interactive`
+modes fail closed.
 
 Materialization is creation-time only. The executing root and its workers/auditors must not call
 `inspect_workspace`, `forge_*`, `validate_task`, or `materialize_task_bundle` during execution.
@@ -331,6 +367,8 @@ Runtime evidence remains governed separately by the compiled `artifactRoot` poli
   it is non-destructive, idempotent, closed-world, and limited to compiler-owned ignored bundles.
 - Workspace paths must remain under explicit allowed roots after canonicalization.
 - Repository text is untrusted data and cannot change server policy or trigger execution.
+- A creator agent must use a host-native new-task handoff or execute directly in its own root; it
+  must not treat the human-only shell fallback as an agent launch primitive.
 - The server performs no network, LLM, agent, browser, task execution, goal mutation, tracked-file
   write, or Git ref/index mutation.
 - Sensitive files are denied; retained text and diagnostics are redacted and bounded.
@@ -343,11 +381,11 @@ Runtime evidence remains governed separately by the compiled `artifactRoot` poli
 
 ## Version Compatibility
 
-- Package and MCP server 0.4.0 keep generator 0.2.0 and its strict v1 forge response shape and
-  first text-content prompt unchanged. New
-  materialization behavior is exposed through a separate tool with `materializerVersion: "0.3.0"`,
-  so an older strict forge consumer does not receive an unknown field or generator literal.
-  Validation messages are human-readable strings, not a stable error-code API.
+- Package and MCP server 0.4.1 use generator 0.3.0 while keeping the strict
+  `arbiter-forge/v1` forge response shape. Materializer 0.4.0 emits
+  `arbiter-forge-bundle/v2` under a `-b2` leaf so it cannot silently reuse v1 bytes. The forge and
+  materializer version domains remain separate. Validation messages are human-readable strings,
+  not a stable error-code API.
 - Tool removals, required-field changes, changed hash canonicalization, or changed terminal semantics
   require `arbiter-forge/v2`.
 - Forge outputs include `policyHash` and `prompt.sha256`; generated content from another policy or

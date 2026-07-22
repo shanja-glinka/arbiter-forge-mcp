@@ -166,7 +166,7 @@ function compile(
     questions,
   };
 
-  if (request.outputMode === "resumable_package") {
+  if (request.outputMode === "resumable_package" && status === "ready") {
     const manifest = withSingleTrailingNewline(
       JSON.stringify(
         {
@@ -407,7 +407,7 @@ function renderModelRouting(context: RenderContext): string {
       : "";
   const goal =
     request.goalMode === "persistent_requested"
-      ? `## Persistent goal lifecycle\n\nThe user explicitly requested persistent goal execution, but this prompt does not pre-emit \`/goal\` because goal state must be inspected first. Before any \`create_goal\` operation, call \`get_goal\`: reuse a compatible active goal; call \`create_goal\` only when no goal exists; and stop for user direction when an incompatible unfinished goal exists. Only the top-level user-facing root may create, inspect, or update goal lifecycle; workers and auditors never manage it. Call \`get_goal\` again at every major fan-in, after material correction waves, and before a terminal decision. Mark complete only after fresh final PASS on the current integrated snapshot. Mark blocked only after the host goal tool\'s repeated external-blocker threshold is satisfied and no meaningful in-scope progress remains. Do not set a token budget unless explicitly requested.`
+      ? `## Persistent goal lifecycle\n\nThis execution contract requires a persistent goal lifecycle, but this prompt does not pre-emit \`/goal\` because goal state must be inspected first. A plan, checklist, or dispatch ladder is not a persistent goal and cannot substitute for this lifecycle. Before any \`create_goal\` operation, call \`get_goal\`: reuse a compatible active goal; call \`create_goal\` when no goal exists or the previous goal is \`complete\`; and stop for user direction when an incompatible unfinished or \`blocked\` goal exists. If no goal mechanism is available at execution time, fail closed before implementation instead of silently degrading to checklist execution. Only the top-level user-facing root may create, inspect, or update goal lifecycle; workers and auditors never manage it. After establishing or reusing the goal, continue implementation, correction, and fresh verification until a terminal outcome; materialization, dispatch, partial work, worker completion, or red tests are not terminal. Call \`get_goal\` again at every major fan-in, after material correction waves, and before a terminal decision. Call \`update_goal\` with \`complete\` only after fresh final PASS on the current integrated snapshot. Call \`update_goal\` with \`blocked\` only after the host goal tool\'s repeated external-blocker threshold is satisfied and no meaningful in-scope progress remains. Do not set a token budget unless explicitly requested.`
       : "";
   return [routing, goal].filter(Boolean).join("\n\n");
 }

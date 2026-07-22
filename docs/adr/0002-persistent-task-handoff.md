@@ -1,6 +1,6 @@
 # ADR-0002: Persistent Repository-local Task Handoff
 
-- Status: Accepted
+- Status: Accepted; launch semantics amended by ADR-0005
 - Date: 2026-07-22
 - Decision owners: Arbiter Forge maintainers
 
@@ -72,26 +72,27 @@ management.
 
 ## Launch contract
 
-The structured result provides absolute paths, all file hashes, structured working-directory data,
-and escaped interactive and non-interactive commands. The recommended command passes the returned
-`run.sh`, prompt, and complete manifest hashes back to the launcher as an out-of-band integrity
-anchor. `run.sh` verifies itself, `task.md`, and all `manifest.json` bytes before using the installed
-Codex CLI. `README.md` remains informational rather than a trust anchor:
+> **Amendment:** [ADR-0005](0005-safe-execution-handoff.md) supersedes this section's automatic
+> launcher semantics only. The repository-local storage, provenance, atomicity, lifecycle
+> terminology, and retention decisions in this ADR remain accepted.
+
+This ADR originally made the hash-verifying script an automatic CLI launcher:
 
 ```bash
 codex exec --sandbox workspace-write -C "$TARGET_ROOT" - < "$TASK_FILE"
 ```
 
-This matches the installed Codex CLI contract: `-C` selects the working root, `-` reads the prompt
-from stdin, and non-interactive execution is explicit. The launcher does not use
-`--dangerously-bypass-approvals-and-sandbox` and does not make the execution ephemeral.
+That form is retained here as historical context, not as current operator guidance. In bundle v2,
+`run.sh` defaults to verification only, creator agents cannot invoke its human-only manual launch
+modes, and execution moves through a Codex App/new-task handoff or direct same-agent continuation.
 
 ## Consequences
 
 ### Positive
 
 - “Created” now has filesystem evidence instead of meaning “compiled in chat”.
-- Every saved task has stable links, hashes, retention semantics, and a one-command launch.
+- Every saved task has stable links, hashes, retention semantics, and an integrity-checked handoff;
+  current execution routes are defined by ADR-0005.
 - The task survives ordinary reboots without entering Git.
 - Execution remains independent of Arbiter Forge MCP and does not pay repeated instruction tokens.
 

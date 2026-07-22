@@ -21,6 +21,24 @@ describe("creation handoff skill contract", () => {
     expect(skill).toContain(
       "Do not say that a Codex task/thread was launched unless the host actually started one",
     );
+    expect(skill).toContain("## Choose the post-materialization route");
+    expect(skill).toContain("Create/save only");
+    expect(skill).toContain("Select no execution route and launch nothing");
+    expect(skill).toContain("Codex App / new task");
+    expect(skill).toContain("Continue with this agent");
+    expect(skill).toContain(
+      "must never invoke `run.sh`, `codex exec`, or a nested interactive Codex session",
+    );
+    expect(skill).toContain("goalMode: persistent_requested");
+    expect(skill).toContain(
+      "A plan, checklist, or worker ladder is not a persistent goal",
+    );
+    expect(skill).toContain("Call `update_goal` only");
+    expect(skill).toContain("operator-only `manual-exec`");
+    expect(skill).toContain(
+      "manual CLI modes never replace a missing goal mechanism",
+    );
+    expect(skill).toContain("compute/compare its SHA-256");
   });
 
   it("forbids every creation-time Forge operation during compiled execution", () => {

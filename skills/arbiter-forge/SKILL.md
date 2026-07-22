@@ -75,8 +75,11 @@ Use the exposed Arbiter Forge operations in this order:
    - `root_arbiter` may describe only the already-running `root_session`. Use
      `diversityMode: require` when an auditor must prove a different actual model/provider; use
      `prefer` for a quality preference that may degrade on a single-model host.
-   - When the operator asks to **create/save a task**, set `outputMode: resumable_package` and include
-     the repository that will be the Codex working directory. A `ready` Forge result means only
+   - When the operator asks to **create/save a task**, set `outputMode: resumable_package` and
+     `goalMode: persistent_requested`, and include the repository that will be the Codex working
+     directory. Materialization rejects a plain goal. If the current agent will execute even a
+     prompt-only result, also set `goalMode: persistent_requested`; `plain` is only for a
+     non-executing prompt/diagnostic handoff. A `ready` Forge result means only
      **compiled**. It does not prove that any file or Codex task exists, and must never be described
      as “created”, “saved”, or “launched”.
 4. **Validate** with `validate_task` when returning a prompt without saving it, or when the operator
@@ -99,7 +102,7 @@ Use the exposed Arbiter Forge operations in this order:
      repository that unambiguously owns the execution workspace, and ask only when that choice is
      materially ambiguous.
    - The tool recompiles the request itself and writes only compiler-produced bytes. It stores the
-     bundle under `<target-repository>/.arbiter-forge/tasks/<task-id>/<fingerprint-prefix>/`, not in
+     bundle under `<target-repository>/.arbiter-forge/tasks/<task-id>/<fingerprint-prefix>-b2/`, not in
      operating-system `/tmp`. It creates a narrow nested ignore policy, proves every task file is
      ignored, writes atomically, verifies hashes, neutralizes Git filters, refuses out-of-allowlist
      worktree and common Git metadata, symlink escapes, and tracked/conflicting files, rolls back
@@ -110,13 +113,42 @@ Use the exposed Arbiter Forge operations in this order:
    - The repo-local bundle survives reboot but remains an ignored local cache: manual deletion or
      `git clean -fdx` can remove it. It is not a committed archive.
 
-Steps 4 and 5 are alternate terminal handoffs: validate-only or validate-and-materialize. Together
+Steps 4 and 5 are alternate creation handoffs: validate-only or validate-and-materialize. Together
 with inspection, framing, and Forge they form the **creation phase**. After materialization, hand
-the saved `task.md` to a
-clean execution task. The executing root, workers, and auditors must not call Arbiter Forge MCP for
+the saved `task.md` to a clean execution task or transition the same top-level agent explicitly.
+The executing root, workers, and auditors must not call Arbiter Forge MCP for
 instructions or repeat `inspect`, `forge`, `validate`, or `materialize` during correction loops. A
 material change to the operator's typed request creates a new bundle; ordinary runtime findings
 stay in the existing ledger.
+
+## Choose the post-materialization route
+
+The creator agent must never invoke `run.sh`, `codex exec`, or a nested interactive Codex session.
+The script default mode is integrity verification only; its `manual-*` modes are a human operator
+fallback. This is a hard creator boundary even when a shell command looks convenient.
+
+After every successful materialization, classify the operator request into exactly one case:
+
+1. **Create/save only.** Select no execution route and launch nothing. Return both future execution
+   options, exact paths, hashes, working directory, and the retention caveat.
+2. **Codex App / new task.** If the operator explicitly asked to launch a separate task and the host
+   exposes a native task/thread tool, use that host tool with the returned target working directory
+   and exact `task.md`; never shell out to Codex. Claim launch only after a real task/thread ID is
+   returned. If no native launch tool is available, give exact UI instructions: open a new Codex App
+   task rooted at the target repository, paste/attach `task.md` or tell it to read the absolute path,
+   and include the expected SHA-256. The new root performs goal preflight before implementation.
+3. **Continue with this agent.** If the operator explicitly asked the current top-level agent to
+   execute, do not return a mere path or command. Read `task.md` and compute/compare its SHA-256
+   directly with host file/hash tools; the creator prohibition includes verify-only `run.sh`.
+   Switch to execution mode without another Forge call, call `get_goal`, reuse a compatible active
+   goal or call `create_goal` when none exists or the previous goal is `complete`. A `blocked` goal
+   requires a user-controlled resume/transition and must not be replaced. Then implement,
+   correct, and freshly verify until terminal `PASS` or justified `BLOCKED`. Call `update_goal` only
+   at that terminal outcome. A plan, checklist, or worker ladder is not a persistent goal.
+
+The human-only manual CLI modes never replace a missing goal mechanism. If the selected execution
+host cannot inspect, create, or update the required goal, fail closed before implementation and
+report that capability blocker.
 
 Use the exact schemas exposed by the `arbiter-forge` MCP server. If an operation is unavailable,
 report the missing capability instead of claiming it ran. A manual prompt may be returned only as
@@ -181,12 +213,14 @@ When the user asks to create or save a task, materialize it before answering. St
 - clickable absolute links to `task.md`, `manifest.json`, `README.md`, and `run.sh`;
 - the absolute bundle root and target working directory;
 - prompt SHA-256 and materialization status (`written` or `unchanged`);
-- the exact `recommendedCommand`, plus interactive/non-interactive alternatives;
+- the verify-only `recommendedCommand`, explicitly labelled as not launching Codex;
+- actionable Codex App/new-task and same-agent execution instructions;
+- the operator-only `manual-exec` and `manual-interactive` fallbacks with the approval caveat;
 - the local-cache retention caveat.
 
 Do not say that a Codex task/thread was launched unless the host actually started one and returned a
-real thread/session identity. Do not execute the task unless the user explicitly asked for
-execution.
+real thread/session identity. If the user explicitly asked for same-agent execution, continue to the
+goal-backed terminal result instead of ending with the materialization handoff.
 
 Do not manufacture empty ledgers or worker packets. Task bundles belong in the materialized
 repository-local `.arbiter-forge/tasks/` store. Runtime reports, logs, screenshots, traces, videos,

@@ -1,7 +1,7 @@
 # Arbiter Forge
 
 Arbiter Forge is a local MCP server and Codex plugin that turns a normalized objective into a
-deterministic orchestration task and can save the validated compiler output as a runnable,
+deterministic orchestration task and can save the validated compiler output as an execution-ready,
 repository-local bundle. It supports three Forge workflows, a cross-cutting routing contract, and
 one independent opt-in coordination skill:
 
@@ -33,14 +33,14 @@ both. Two registrations would expose duplicate tool sets.
 
 ## Tools
 
-| Tool                        | Result                                                                                          |
-| --------------------------- | ----------------------------------------------------------------------------------------------- |
-| `inspect_workspace`         | Allowlisted Git/rules/harness metadata and source hashes; never source contents.                |
-| `forge_implementation_task` | Adaptive Compact/Standard/Critical implementation prompt with applicable independent audits.    |
-| `forge_documentation_task`  | Intent/code/governance discovery, arbiter disposition, authoring, and cold-reader verification. |
-| `forge_blind_check_task`    | Isolated D1/D2/D3 comparison with forbidden-extra and ownership mismatch detection.             |
-| `validate_task`             | Deterministic request recompile, byte identity, ready-state, and structural terminal checks.    |
-| `materialize_task_bundle`   | Save validated compiler-owned bytes in an ignored repo-local bundle and return launch commands. |
+| Tool                        | Result                                                                                              |
+| --------------------------- | --------------------------------------------------------------------------------------------------- |
+| `inspect_workspace`         | Allowlisted Git/rules/harness metadata and source hashes; never source contents.                    |
+| `forge_implementation_task` | Adaptive Compact/Standard/Critical implementation prompt with applicable independent audits.        |
+| `forge_documentation_task`  | Intent/code/governance discovery, arbiter disposition, authoring, and cold-reader verification.     |
+| `forge_blind_check_task`    | Isolated D1/D2/D3 comparison with forbidden-extra and ownership mismatch detection.                 |
+| `validate_task`             | Deterministic request recompile, byte identity, ready-state, and structural terminal checks.        |
+| `materialize_task_bundle`   | Save a persistent-goal task in an ignored repo-local bundle and return explicit execution handoffs. |
 
 ## Prompts and resources
 
@@ -64,12 +64,11 @@ Five read-only resources expose the packaged long-form policy assets:
 | `ui-playwright-method`           | `arbiter-forge://method/ui-playwright`           |
 | `model-goal-method`              | `arbiter-forge://method/model-goal`              |
 
-Package 0.4.0 deliberately retains generator 0.2.0's strict v1 forge envelope and deterministic
-compiler bytes. It emits `requestFingerprint`, `policyHash`, `routingPlanHash`, a typed
-`routingPlan`, and `prompt.sha256`. `status: ready` means compiled, not saved or launched. The new
-materializer has its own `materializerVersion: "0.3.0"`; old strict v1 forge consumers therefore do
-not receive an unknown response field. The server performs no LLM, network, browser, agent, goal,
-or execution action.
+Package 0.4.1 uses generator 0.3.0 with the strict v1 forge envelope. It emits
+`requestFingerprint`, `policyHash`, `routingPlanHash`, a typed `routingPlan`, and `prompt.sha256`.
+`status: ready` means compiled, not saved or launched. Materializer 0.4.0 introduces the
+`arbiter-forge-bundle/v2` handoff without adding a field to the strict forge response. The server
+performs no LLM, network, browser, agent, goal, or execution action.
 
 `validate_task` accepts the generated prompt, its operation, the original typed forge request, and
 the forge result's `prompt.sha256`. It recompiles that request and returns `assurance: "recompiled"`
@@ -107,7 +106,7 @@ explicit target repository ID. It recompiles instead of trusting caller-provided
 then saves `task.md`, `manifest.json`, `README.md`, and `run.sh` under:
 
 ```text
-<target-repository>/.arbiter-forge/tasks/<task-id>/<request-fingerprint-prefix>/
+<target-repository>/.arbiter-forge/tasks/<task-id>/<request-fingerprint-prefix>-b2/
 ```
 
 It creates narrow nested ignore rules for only its own `.gitignore` and `tasks/`, proves each path
@@ -209,11 +208,16 @@ Ask Codex to use Arbiter Forge, or call the MCP sequence explicitly:
    capabilities, and optional per-role routing overrides.
 4. For prompt-only output, call `validate_task` with the original typed request and generated hash.
    Human edits are diagnostics only; re-forge to obtain a compiler-valid prompt.
-5. When the operator asked to create/save the task, call `materialize_task_bundle` **instead of a
-   separate validation call**. It performs the deterministic recompile itself. Only `written` or
-   `unchanged` means the bundle exists.
-6. Run the returned `recommendedCommand`, or hand `task.md` to a clean execution task. The executing
-   root records requested and actual routes but does not call Arbiter Forge again.
+5. When the operator asked to create/save an executable task, set both
+   `outputMode: "resumable_package"` and `goalMode: "persistent_requested"`, then call
+   `materialize_task_bundle` **instead of a separate validation call**. It performs the
+   deterministic recompile itself. Only `written` or `unchanged` means the bundle exists.
+6. Report that the task is materialized but not launched, then give both host-native routes:
+   create a new Codex App task from `task.md`, or let the same top-level agent continue directly.
+   The creator must never run `run.sh`, `codex exec`, or a nested Codex session.
+7. Whichever root executes the task first verifies the prompt hash, calls `get_goal`, creates or
+   reuses the compatible persistent goal, and owns it through fresh terminal `PASS` or justified
+   `BLOCKED`. A plan or dispatch ladder is not a substitute for that goal.
 
 Arbiter Forge is a creation-time compiler, not a runtime instruction service. Workers and auditors
 never query it. The creator pays once for inspection/compilation output; the execution task receives
@@ -232,21 +236,40 @@ Arbiter Forge uses four distinct lifecycle words:
 - **materialized**: `materialize_task_bundle` returned `written` or `unchanged` and verified files;
 - **launched**: the host actually started a Codex task/thread.
 
-After materialization the response includes absolute file paths, hashes, working directory, and
-three launch forms. The shortest is:
+Materialization is accepted only for `outputMode: "resumable_package"` with
+`goalMode: "persistent_requested"`. `plain` remains available only for non-executing
+`prompt_only` output. After materialization the response includes absolute file paths, hashes,
+working directory, and the following two primary routes:
+
+- **Codex App / new task:** create a task rooted at the target repository, paste or attach
+  `task.md` (or tell the new root to read its absolute path), and retain the returned task/thread
+  identity as launch evidence;
+- **same top-level agent:** when execution was requested in the current task, read `task.md`
+  directly and enter execution mode without another Forge call or nested Codex process.
+
+Both routes are goal-first. The executing root verifies the prompt hash, calls `get_goal`, creates
+or reuses only a compatible persistent goal, and keeps ownership through implementation,
+correction, fresh audit, and terminal `update_goal`. It must not stop after merely constructing or
+dispatching a ladder.
+
+`run.sh` is not the agent handoff. Its default action is integrity verification only:
 
 ```bash
 bash '<absolute-bundle-path>/run.sh' \
   '<run-sha256>' '<prompt-sha256>' '<manifest-sha256>'
 ```
 
-Adding `interactive` after the three hashes opens an interactive Codex CLI task. The hashes returned
-in the MCP handoff are an out-of-band integrity anchor: the launcher verifies itself, `task.md`, and
-the complete `manifest.json` bytes, then runs
-`codex exec --sandbox workspace-write -C <target> - < task.md`. `README.md` is informational; its
-hash is returned at materialization but it is not a launcher trust anchor. Execution never calls
-Arbiter Forge MCP. The ignored bundle survives an OS reboot, but manual cleanup or `git clean -fdx`
-can remove it; it is a persistent local handoff, not a committed archive.
+It prints the verified task path and exits without starting Codex. Human operators may explicitly
+append `manual-exec` or `manual-interactive`. Both pin approval handling to `never`, so an
+unavailable approval fails instead of hanging; `manual-interactive` additionally requires a real
+TTY. Creator agents must not invoke either manual mode. Legacy `exec` and `interactive` arguments
+are rejected.
+
+The returned hashes are an out-of-band integrity anchor: the script verifies itself, `task.md`, and
+the complete `manifest.json` bytes. `README.md` is informational; its hash is returned at
+materialization but it is not a launcher trust anchor. Execution never calls Arbiter Forge MCP.
+The ignored bundle survives an OS reboot, but manual cleanup or `git clean -fdx` can remove it; it
+is a persistent local handoff, not a committed archive.
 
 Example implementation input:
 
@@ -267,7 +290,8 @@ Example implementation input:
     "money_or_pricing"
   ],
   "implementationSurfaces": ["backend_or_shared", "frontend"],
-  "goalMode": "plain",
+  "outputMode": "resumable_package",
+  "goalMode": "persistent_requested",
   "modelRouting": "adaptive"
 }
 ```
@@ -279,8 +303,9 @@ arbitration; Forge never changes or fabricates its model. Terra handles bounded 
 and coding, Luna has a Terra fallback for test execution, and fresh Sol contexts handle material
 audits. A configured
 `arbiter-forge-ui-claude` custom agent is preferred for browser UI work, with Terra/Sol fallbacks;
-Forge never assumes that agent or provider exists. `goalMode: "persistent_requested"` emits a `get_goal` →
-conditional `create_goal` lifecycle, but never pre-emits `/goal` before state inspection.
+Forge never assumes that agent or provider exists. `goalMode: "persistent_requested"` emits a
+`get_goal` → conditional `create_goal` lifecycle, but never pre-emits `/goal` before state
+inspection. It is mandatory for a materialized bundle; `plain` is a non-executing prompt-only mode.
 
 `diversityMode: "prefer"` is best effort. `diversityMode: "require"` is a runtime gate: the host must
 prove that the auditor's actual model/provider differs from the named worker role or refuse to
@@ -322,6 +347,7 @@ Architecture and protocol details live in:
 - [ADR-0001](docs/adr/0001-hybrid-plugin-mcp.md)
 - [ADR-0002](docs/adr/0002-persistent-task-handoff.md)
 - [ADR-0003 (proposed durable multi-lane execution)](docs/adr/0003-durable-multi-lane-execution.md)
+- [ADR-0005 (safe post-materialization execution handoff)](docs/adr/0005-safe-execution-handoff.md)
 - [Protocol v1](docs/protocol.md)
 
 ## License

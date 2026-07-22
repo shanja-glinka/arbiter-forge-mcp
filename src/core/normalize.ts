@@ -68,6 +68,14 @@ export function normalizeRequest(
       "roleRouting cannot be supplied when modelRouting is omit",
     );
   }
+  if (
+    request.outputMode === "resumable_package" &&
+    request.goalMode !== "persistent_requested"
+  ) {
+    blockingErrors.push(
+      "outputMode=resumable_package requires goalMode=persistent_requested; plain is only valid for a non-executing prompt_only handoff",
+    );
+  }
 
   const repositories = [...request.repositories]
     .map((repository) => normalizeRepository(repository))

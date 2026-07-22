@@ -1,6 +1,6 @@
 {
   "name": "arbiter-forge",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Forge, validate, and persist runnable multimodel task bundles with optional root-to-root workspace coordination.",
   "author": {
     "name": "shanja-glinka"
@@ -9,12 +9,12 @@
   "interface": {
     "displayName": "Arbiter Forge",
     "shortDescription": "Build and save runnable multimodel arbiter tasks.",
-    "longDescription": "Arbiter Forge turns a normalized objective into a deterministic, self-contained orchestration prompt with role-oriented model/provider fallbacks, validates its provenance, and can persist it as an ignored repository-local task bundle with exact launch commands. An independent opt-in skill coordinates root tasks that contend for shared workspace or runtime resources without turning MCP into a scheduler.",
+    "longDescription": "Arbiter Forge turns a normalized objective into a deterministic, self-contained orchestration prompt with role-oriented model/provider fallbacks, validates its provenance, and persists it as an ignored repository-local task bundle with goal-backed Codex App or same-agent handoff. An independent opt-in skill coordinates root tasks that contend for shared workspace or runtime resources without turning MCP into a scheduler.",
     "developerName": "shanja-glinka",
     "category": "Productivity",
     "capabilities": ["MCP tools", "Skills"],
     "defaultPrompt": [
-      "Use Arbiter Forge to produce, validate, and materialize the smallest sufficient hard-arbiter task for my objective, then give me its artifact links and launch commands."
+      "Use Arbiter Forge to produce, validate, and materialize the smallest sufficient hard-arbiter task for my objective, then give me artifact links and explicit Codex App or same-agent execution instructions."
     ]
   },
   "mcpServers": "./.mcp.json"
