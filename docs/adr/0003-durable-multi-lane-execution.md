@@ -134,8 +134,9 @@ adapter, with the actual route recorded in each lane receipt.
   real process and Git state.
 - Leases and hashes reduce accidental corruption but do not defend against a malicious same-account
   process.
-- The profile remains proposed. Arbiter Forge 0.3.0 does not create run ledgers, install hooks, or
-  schedule agents.
+- The profile remains proposed. Arbiter Forge 0.4.0 does not create run ledgers, install hooks, or
+  schedule agents. Its separate peer-coordination skill is an advisory root-to-root protocol, not
+  an implementation of this runner.
 
 ## References
 

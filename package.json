@@ -1,7 +1,7 @@
 {
   "name": "arbiter-forge-mcp",
-  "version": "0.3.0",
-  "description": "Deterministic MCP forge and persistent handoff for multimodel hard-arbiter tasks.",
+  "version": "0.4.0",
+  "description": "Deterministic MCP forge, persistent handoff, and opt-in peer coordination skills for multimodel hard-arbiter tasks.",
   "private": true,
   "license": "UNLICENSED",
   "type": "module",

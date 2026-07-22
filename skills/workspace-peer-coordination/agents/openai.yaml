@@ -1,0 +1,4 @@
+interface:
+  display_name: "Workspace Peer Coordination"
+  short_description: "Coordinate independent Codex roots safely"
+  default_prompt: "Use $workspace-peer-coordination to coordinate independent Codex tasks that share a worktree or runtime resources."

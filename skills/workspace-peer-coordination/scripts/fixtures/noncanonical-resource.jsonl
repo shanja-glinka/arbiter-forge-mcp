@@ -1,0 +1,1 @@
+{"protocol":"workspace-peer-coordination/v1","coordinationId":"alias-001","sequence":1,"type":"REQUEST","at":"2026-07-22T10:20:00.000Z","sender":"root-a","recipient":"root-b","evidence":["shared worktree"],"nextAction":"wait","resources":["worktree:/repo/"],"protectedScopes":[],"snapshot":"git:aaa","deadline":"2026-07-22T10:30:00.000Z","criticalSection":"immutable gate"}

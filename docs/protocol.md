@@ -343,7 +343,7 @@ Runtime evidence remains governed separately by the compiled `artifactRoot` poli
 
 ## Version Compatibility
 
-- Package and MCP server 0.3.0 keep generator 0.2.0 and its strict v1 forge response shape and
+- Package and MCP server 0.4.0 keep generator 0.2.0 and its strict v1 forge response shape and
   first text-content prompt unchanged. New
   materialization behavior is exposed through a separate tool with `materializerVersion: "0.3.0"`,
   so an older strict forge consumer does not receive an unknown field or generator literal.

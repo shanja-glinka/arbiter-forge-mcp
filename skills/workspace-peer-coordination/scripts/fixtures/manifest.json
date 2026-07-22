@@ -1,0 +1,87 @@
+[
+  {
+    "file": "happy-path.jsonl",
+    "expectedPass": true,
+    "expectedErrorCodes": []
+  },
+  {
+    "file": "safe-decline.jsonl",
+    "expectedPass": true,
+    "expectedErrorCodes": []
+  },
+  {
+    "file": "missing-release.jsonl",
+    "expectedPass": false,
+    "expectedErrorCodes": ["incomplete_coordination"]
+  },
+  {
+    "file": "stale-release.jsonl",
+    "expectedPass": false,
+    "expectedErrorCodes": ["claim_token_mismatch"]
+  },
+  {
+    "file": "resume-before-release.jsonl",
+    "expectedPass": false,
+    "expectedErrorCodes": ["invalid_transition", "release_sequence_mismatch"]
+  },
+  {
+    "file": "overlapping-claims.jsonl",
+    "expectedPass": false,
+    "expectedErrorCodes": ["overlapping_active_claim"]
+  },
+  {
+    "file": "expired-claim.jsonl",
+    "expectedPass": false,
+    "expectedErrorCodes": ["incomplete_coordination"]
+  },
+  {
+    "file": "duplicate-sequence.jsonl",
+    "expectedPass": false,
+    "expectedErrorCodes": ["non_contiguous_sequence"]
+  },
+  {
+    "file": "claimed-abort-resumed.jsonl",
+    "expectedPass": true,
+    "expectedErrorCodes": []
+  },
+  {
+    "file": "claimed-abort-without-resume.jsonl",
+    "expectedPass": false,
+    "expectedErrorCodes": ["incomplete_coordination"]
+  },
+  {
+    "file": "shortened-deadline.jsonl",
+    "expectedPass": false,
+    "expectedErrorCodes": ["event_after_deadline", "incomplete_coordination"]
+  },
+  {
+    "file": "noncanonical-resource.jsonl",
+    "expectedPass": false,
+    "expectedErrorCodes": ["invalid_resources"]
+  },
+  {
+    "file": "reordered-overlap.jsonl",
+    "expectedPass": false,
+    "expectedErrorCodes": ["global_time_regression"]
+  },
+  {
+    "file": "hierarchical-overlap.jsonl",
+    "expectedPass": false,
+    "expectedErrorCodes": ["overlapping_active_claim"]
+  },
+  {
+    "file": "post-deadline-resume.jsonl",
+    "expectedPass": true,
+    "expectedErrorCodes": []
+  },
+  {
+    "file": "duplicate-claim-token.jsonl",
+    "expectedPass": false,
+    "expectedErrorCodes": ["duplicate_claim_token"]
+  },
+  {
+    "file": "claimant-recovery.jsonl",
+    "expectedPass": false,
+    "expectedErrorCodes": ["incomplete_coordination"]
+  }
+]

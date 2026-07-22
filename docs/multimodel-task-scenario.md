@@ -277,7 +277,9 @@ Parallel execution should normally stay within two or three active lanes. A shar
 writer; additional writers require isolated worktrees and non-overlapping ownership. Parking a lane
 in prose is insufficient: it needs an owner, exact next action, and a time- or event-based resume
 condition. The proposed durable scheduler and recovery contract is specified in
-[ADR-0003](adr/0003-durable-multi-lane-execution.md); it is not implemented by package 0.3.0.
+[ADR-0003](adr/0003-durable-multi-lane-execution.md); it is not implemented by package 0.4.0. The
+separate `workspace-peer-coordination` skill handles only cooperative root-to-root contention and
+does not implement that runner.
 
 ## Host without multiple models
 

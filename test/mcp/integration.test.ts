@@ -38,7 +38,7 @@ describe("bundled stdio MCP server", () => {
 
       expect(client.getServerVersion()).toEqual({
         name: "arbiter-forge",
-        version: "0.3.0",
+        version: "0.4.0",
       });
       expect(client.getInstructions()).toContain("never executes tasks");
       const tools = (await client.listTools()).tools;

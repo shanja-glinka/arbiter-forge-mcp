@@ -2,12 +2,14 @@
 
 Arbiter Forge is a local MCP server and Codex plugin that turns a normalized objective into a
 deterministic orchestration task and can save the validated compiler output as a runnable,
-repository-local bundle. It supports three workflows plus a cross-cutting routing contract:
+repository-local bundle. It supports three Forge workflows, a cross-cutting routing contract, and
+one independent opt-in coordination skill:
 
 - implementation led by a hard root arbiter;
 - independent documentation synthesis from intent, code, and governance;
 - a strict D1/D2/D3 documentation-versus-code blind check;
 - role-oriented model/provider routing with operator overrides and honest fallbacks.
+- bounded root-to-root coordination when independent tasks contend for a worktree or runtime.
 
 It deliberately does **not** execute the generated task. Its only write operation is a constrained,
 idempotent creation-time materializer for compiler-owned bytes under an ignored
@@ -18,10 +20,12 @@ skill without building a second agent scheduler inside MCP.
 
 ## Why this shape
 
-The product has two complementary layers:
+The product has three complementary layers:
 
 1. `skills/arbiter-forge` teaches Codex when and how to use the protocols.
-2. The STDIO MCP server provides typed inputs, deterministic rendering, hashes, bounded workspace
+2. `skills/workspace-peer-coordination` optionally coordinates independent root tasks only when
+   they contend for shared mutable resources.
+3. The STDIO MCP server provides typed inputs, deterministic rendering, hashes, bounded workspace
    inspection, validation, and an explicit persistent task handoff.
 
 Use either direct MCP registration or plugin-owned MCP registration in one Codex profile, never
@@ -60,7 +64,7 @@ Five read-only resources expose the packaged long-form policy assets:
 | `ui-playwright-method`           | `arbiter-forge://method/ui-playwright`           |
 | `model-goal-method`              | `arbiter-forge://method/model-goal`              |
 
-Package 0.3.0 deliberately retains generator 0.2.0's strict v1 forge envelope and deterministic
+Package 0.4.0 deliberately retains generator 0.2.0's strict v1 forge envelope and deterministic
 compiler bytes. It emits `requestFingerprint`, `policyHash`, `routingPlanHash`, a typed
 `routingPlan`, and `prompt.sha256`. `status: ready` means compiled, not saved or launched. The new
 materializer has its own `materializerVersion: "0.3.0"`; old strict v1 forge consumers therefore do
@@ -72,6 +76,31 @@ the forge result's `prompt.sha256`. It recompiles that request and returns `assu
 only when the request is `ready` and prompt bytes are identical. A manually edited prompt is
 `structural_only` and cannot pass compiler validation; change the typed request and forge again.
 The result's historical lowercase `pass` boolean is not a runtime `PASS` verdict.
+
+## Optional peer coordination
+
+`workspace-peer-coordination` is a separate companion skill. It activates only when independent
+root tasks share an exclusive worktree, port, process tree, service, or immutable test window. It
+uses a bounded cooperative handshake:
+
+```text
+REQUEST -> PARKED_ACK -> CLAIMED -> RELEASED -> RESUMED
+```
+
+The skill keeps negotiation visible in both root transcripts, requires fresh evidence before claim
+and resume, rejects silent deadline extensions, and provides a deterministic JSONL trace evaluator.
+It does not add a message bus, scheduler, lock, ledger, hook, or thread-discovery tool to the MCP
+server. Workers never call Forge for coordination.
+
+Validate the packaged evaluator with:
+
+```bash
+node skills/workspace-peer-coordination/scripts/evaluate-trace.mjs --self-test
+```
+
+The live evaluation plan intentionally remains outside normal task generation. Promote peer
+coordination into a future optional Forge input only after repeated host-level trials prove safe
+handoffs, expiry recovery, compaction recovery, and third-root behavior.
 
 `materialize_task_bundle` accepts the same typed request, operation, expected prompt hash, and an
 explicit target repository ID. It recompiles instead of trusting caller-provided package bytes,
@@ -144,6 +173,7 @@ The repository is also a valid plugin:
 - `.codex-plugin/plugin.json` registers the skill metadata;
 - `.mcp.json` starts the bundled server relative to the plugin root;
 - `skills/arbiter-forge/SKILL.md` routes Codex to the correct workflow.
+- `skills/workspace-peer-coordination/SKILL.md` supplies opt-in root-to-root contention handling.
 
 Plugin-owned `.mcp.json` stays portable: it contains no machine path and passes
 `ARBITER_FORGE_ALLOWED_ROOTS_JSON` through from the environment that launches Codex. Set the value

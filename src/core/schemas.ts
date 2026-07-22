@@ -1,7 +1,7 @@
 import { z } from "zod/v4";
 
 export const SCHEMA_VERSION = "arbiter-forge/v1" as const;
-export const PACKAGE_VERSION = "0.3.0" as const;
+export const PACKAGE_VERSION = "0.4.0" as const;
 export const MATERIALIZER_VERSION = "0.3.0" as const;
 // The compiler output remains byte/schema compatible with v0.2.0. The package
 // and materializer can evolve without pretending the deterministic generator changed.

@@ -1,7 +1,7 @@
 {
   "name": "arbiter-forge",
-  "version": "0.3.0",
-  "description": "Forge, validate, and persist runnable multimodel implementation, documentation, and blind-check task bundles.",
+  "version": "0.4.0",
+  "description": "Forge, validate, and persist runnable multimodel task bundles with optional root-to-root workspace coordination.",
   "author": {
     "name": "shanja-glinka"
   },
@@ -9,7 +9,7 @@
   "interface": {
     "displayName": "Arbiter Forge",
     "shortDescription": "Build and save runnable multimodel arbiter tasks.",
-    "longDescription": "Arbiter Forge turns a normalized objective into a deterministic, self-contained orchestration prompt with role-oriented model/provider fallbacks, validates its provenance, and can persist it as an ignored repository-local task bundle with exact launch commands.",
+    "longDescription": "Arbiter Forge turns a normalized objective into a deterministic, self-contained orchestration prompt with role-oriented model/provider fallbacks, validates its provenance, and can persist it as an ignored repository-local task bundle with exact launch commands. An independent opt-in skill coordinates root tasks that contend for shared workspace or runtime resources without turning MCP into a scheduler.",
     "developerName": "shanja-glinka",
     "category": "Productivity",
     "capabilities": ["MCP tools", "Skills"],
