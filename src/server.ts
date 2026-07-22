@@ -4,6 +4,7 @@ import { isAbsolute } from "node:path";
 import { z } from "zod/v4";
 
 import { inspectWorkspace } from "./core/inspect.js";
+import { materializeTaskBundle } from "./core/materialize.js";
 import { readPolicy } from "./core/policy.js";
 import {
   compileBlindCheckTask,
@@ -16,11 +17,13 @@ import {
   blindCheckRequestSchema,
   documentationForgeResultSchema,
   documentationRequestSchema,
-  GENERATOR_VERSION,
   implementationForgeResultSchema,
   implementationRequestSchema,
   inspectWorkspaceRequestSchema,
   inspectWorkspaceResultSchema,
+  PACKAGE_VERSION,
+  materializeTaskRequestSchema,
+  materializeTaskResultSchema,
   promptValidationResultSchema,
   validateTaskRequestSchema,
 } from "./core/schemas.js";
@@ -32,12 +35,19 @@ const READ_ONLY_ANNOTATIONS = {
   openWorldHint: false,
 } as const;
 
+const MATERIALIZE_ANNOTATIONS = {
+  readOnlyHint: false,
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: false,
+} as const;
+
 export function createServer(): McpServer {
   const server = new McpServer(
-    { name: "arbiter-forge", version: GENERATOR_VERSION },
+    { name: "arbiter-forge", version: PACKAGE_VERSION },
     {
       instructions:
-        "Arbiter Forge generates and validates orchestration task specifications only. It compiles role-oriented model/provider preferences and fallbacks, but does not execute tasks, launch agents, observe actual routes, modify projects, manage goals, or claim audit PASS. Use forge_implementation_task for coding work, forge_documentation_task for independent documentation synthesis, and forge_blind_check_task for strict docs-versus-code comparison. Runtime route attestations and terminal PASS require fresh host evidence.",
+        "Arbiter Forge compiles and validates orchestration task specifications, then can materialize compiler-owned bytes as a persistent ignored bundle inside an allowlisted target repository. forge status=ready means compiled, not created. When the operator asks to create a task, call materialize_task_bundle and claim saved/created only for status=written or unchanged. Materialization is creation-time only: the server never executes tasks, launches agents, observes actual routes, manages goals, or claims audit PASS, and execution agents must not call it. Use forge_implementation_task for coding work, forge_documentation_task for independent documentation synthesis, and forge_blind_check_task for strict docs-versus-code comparison.",
     },
   );
 
@@ -65,7 +75,7 @@ export function createServer(): McpServer {
     {
       title: "Forge implementation arbiter task",
       description:
-        "Compile a deterministic, self-contained implementation prompt with adaptive risk, per-role model/provider preferences and fallbacks, ownership, independent audits, UI/GraphQL proof when applicable, correction loops, and hard terminal gates.",
+        "Compile a deterministic, self-contained implementation prompt with adaptive risk, per-role model/provider preferences and fallbacks, ownership, independent audits, UI/GraphQL proof when applicable, correction loops, and hard terminal gates. Compilation does not create files or launch a task.",
       inputSchema: implementationRequestSchema,
       outputSchema: implementationForgeResultSchema,
       annotations: READ_ONLY_ANNOTATIONS,
@@ -81,7 +91,7 @@ export function createServer(): McpServer {
     {
       title: "Forge documentation synthesis task",
       description:
-        "Compile an independent intent/code/governance discovery workflow that creates as-is, to-be, or mixed documentation plus optional implementation task deliverables.",
+        "Compile an independent intent/code/governance discovery workflow that creates as-is, to-be, or mixed documentation plus optional implementation task deliverables. Compilation does not create files or launch a task.",
       inputSchema: documentationRequestSchema,
       outputSchema: documentationForgeResultSchema,
       annotations: READ_ONLY_ANNOTATIONS,
@@ -97,7 +107,7 @@ export function createServer(): McpServer {
     {
       title: "Forge strict documentation blind check",
       description:
-        "Compile an isolated D1/D2/D3 documentation-versus-code audit with allowlists, manifests, normalized comparison, forbidden-extra detection, and honest degradation when isolation cannot be proven.",
+        "Compile an isolated D1/D2/D3 documentation-versus-code audit with allowlists, manifests, normalized comparison, forbidden-extra detection, and honest degradation when isolation cannot be proven. Compilation does not create files or launch a task.",
       inputSchema: blindCheckRequestSchema,
       outputSchema: blindCheckForgeResultSchema,
       annotations: READ_ONLY_ANNOTATIONS,
@@ -113,7 +123,7 @@ export function createServer(): McpServer {
     {
       title: "Validate an Arbiter Forge task prompt",
       description:
-        "Recompile the original typed forge request and grant PASS only to a ready, byte-identical generated prompt. Edited text receives structural-only diagnostics.",
+        "Recompile the original typed forge request and report compiler-validation success only for a ready, byte-identical generated prompt. Edited text receives structural-only diagnostics; this is never a runtime PASS verdict.",
       inputSchema: validateTaskRequestSchema,
       outputSchema: promptValidationResultSchema,
       annotations: READ_ONLY_ANNOTATIONS,
@@ -129,14 +139,95 @@ export function createServer(): McpServer {
     },
   );
 
+  server.registerTool(
+    "materialize_task_bundle",
+    {
+      title: "Materialize a validated Arbiter Forge task bundle",
+      description:
+        "Recompile and validate the original typed request, then atomically save only compiler-produced task bytes under <target-repository>/.arbiter-forge/tasks/. Proves Git-ignore, refuses conflicts and symlink escapes, and returns exact launch commands without starting Codex.",
+      inputSchema: materializeTaskRequestSchema,
+      outputSchema: materializeTaskResultSchema,
+      annotations: MATERIALIZE_ANNOTATIONS,
+    },
+    async (input) => {
+      const result = materializeTaskBundle(
+        materializeTaskRequestSchema.parse(input),
+      );
+      const summary = formatMaterializationHandoff(result);
+      return {
+        structuredContent: result as unknown as Record<string, unknown>,
+        content: [{ type: "text", text: summary }],
+      };
+    },
+  );
+
   registerPrompts(server);
   registerResources(server);
   return server;
 }
 
+function formatMaterializationHandoff(
+  result: ReturnType<typeof materializeTaskBundle>,
+): string {
+  if (!result.materialized || !result.launch || !result.bundleRoot) {
+    return `Task bundle was not materialized (${result.status}). It was not launched. Errors: ${result.errors.join("; ")}`;
+  }
+  const fileLines = result.files.map(
+    (file) =>
+      `- [${file.relativePath}](<${escapeMarkdownLinkTarget(file.absolutePath)}>) — SHA-256 \`${file.sha256}\``,
+  );
+  return `Task bundle materialized, but not launched.
+
+- Status: \`${result.status}\`
+- Bundle root: ${markdownCodeSpan(result.bundleRoot)}
+- Target working directory: ${markdownCodeSpan(result.launch.workingDirectory)}
+- Prompt SHA-256: \`${result.validation.promptSha256}\`
+- Git-ignore proof: ${markdownCodeSpan(result.storage.ignoreProofCommand ?? "")}
+
+Files:
+${fileLines.join("\n")}
+
+Launch commands:
+
+Recommended:
+${markdownShellBlock(result.launch.recommendedCommand)}
+
+Non-interactive:
+${markdownShellBlock(result.launch.nonInteractiveCommand)}
+
+Interactive:
+${markdownShellBlock(result.launch.interactiveCommand)}
+
+Retention: ${result.warnings.join(" ")}`;
+}
+
+function escapeMarkdownLinkTarget(path: string): string {
+  return encodeURI(path).replaceAll("#", "%23").replaceAll("?", "%3F");
+}
+
+function markdownCodeSpan(value: string): string {
+  const longestRun = Math.max(
+    0,
+    ...Array.from(value.matchAll(/`+/gu), (match) => match[0].length),
+  );
+  const fence = "`".repeat(longestRun + 1);
+  return `${fence}${value}${fence}`;
+}
+
+function markdownShellBlock(command: string): string {
+  const longestRun = Math.max(
+    2,
+    ...Array.from(command.matchAll(/`+/gu), (match) => match[0].length),
+  );
+  const fence = "`".repeat(longestRun + 1);
+  return `${fence}bash\n${command}\n${fence}`;
+}
+
 function forgeToolResult(result: ReturnType<typeof compileImplementationTask>) {
   return {
     structuredContent: result,
+    // Preserve the v0.2 content contract: existing consumers read content[0]
+    // as the exact task prompt. Lifecycle guidance lives in server/tool instructions.
     content: [{ type: "text" as const, text: result.prompt.text }],
   };
 }

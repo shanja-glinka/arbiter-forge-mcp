@@ -41,7 +41,7 @@ export function validateTaskPrompt(
   }
   if (!request.expectedPromptSha256) {
     blockingErrors.push(
-      "expectedPromptSha256 is required for PASS; unbound edited text receives structural findings only and must be re-forged.",
+      "expectedPromptSha256 is required for compiler-validation success; unbound edited text receives structural findings only and must be re-forged.",
     );
   } else if (!hashBound) {
     blockingErrors.push("Prompt hash differs from expectedPromptSha256.");

@@ -38,6 +38,46 @@ describe("task compilers", () => {
     expect(result.prompt.text).not.toContain("## Versioned policy appendix");
     expect(result.prompt.text.length).toBeLessThan(7_000);
     expect(result.validation.blockingErrors).toEqual([]);
+    expect(result).not.toHaveProperty("handoff");
+  });
+
+  it("emits a deterministic resumable package without claiming persistence", () => {
+    const request = implementationRequestSchema.parse({
+      taskId: "saved-task",
+      objective: "Compile a runnable package.",
+      repositories: [{ id: "target", root: "/tmp/target" }],
+      outputMode: "resumable_package",
+    });
+
+    const first = compileImplementationTask(request);
+    const second = compileImplementationTask(request);
+
+    expect(first.package).toEqual(second.package);
+    expect(first.package?.map((file) => file.relativePath)).toEqual([
+      "task.md",
+      "manifest.json",
+    ]);
+    expect(first.package?.[0]).toMatchObject({
+      content: first.prompt.text,
+      sha256: first.prompt.sha256,
+    });
+    expect(first).not.toHaveProperty("handoff");
+  });
+
+  it("retains the v0.2 compiler bytes while the server evolves independently", () => {
+    const result = compileImplementationTask(
+      implementationRequestSchema.parse({
+        taskId: "compat-probe",
+        objective: "Compile a bounded compatibility probe.",
+        riskSignals: ["graphql_client"],
+      }),
+    );
+
+    expect(result.generatorVersion).toBe("0.2.0");
+    expect(result.prompt.sha256).toBe(
+      "e96a19a10cb8455894a965daacdbd13a964e05b04f8800b8ce88a6e82dd8bf78",
+    );
+    expect(result).not.toHaveProperty("handoff");
   });
 
   it("escalates tenant/pricing UI work and renders Playwright plus GraphQL proof", () => {

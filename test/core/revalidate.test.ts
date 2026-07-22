@@ -79,7 +79,7 @@ describe("deterministic task revalidation", () => {
       "expectedPromptSha256 does not match the deterministic recompile.",
     );
     expect(result.blockingErrors).toContain(
-      "Prompt bytes differ from the deterministic recompile; edited prompts cannot receive PASS. Re-forge the typed request.",
+      "Prompt bytes differ from the deterministic recompile; edited prompts cannot pass compiler validation. Re-forge the typed request.",
     );
   });
 

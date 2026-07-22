@@ -1,4 +1,10 @@
-import { readFileSync, realpathSync, statSync } from "node:fs";
+import {
+  lstatSync,
+  readFileSync,
+  readlinkSync,
+  realpathSync,
+  statSync,
+} from "node:fs";
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { spawnSync } from "node:child_process";
 
@@ -166,7 +172,7 @@ export function inspectWorkspace(rawInput: unknown): InspectWorkspaceResult {
   const input = inspectWorkspaceRequestSchema.parse(rawInput);
   const warnings: string[] = [];
   const errors: string[] = [];
-  const allowedRoots = loadAllowedRoots(errors);
+  const allowedRoots = loadAllowedRoots(errors, "Workspace inspection");
 
   if (allowedRoots.length === 0) {
     return finalize("denied", [], [], [], warnings, errors);
@@ -290,18 +296,29 @@ function inspectGit(
     return null;
   }
   const gitDirectory = runGit(root, ["rev-parse", "--absolute-git-dir"]);
+  const gitCommonDirectory = runGit(root, [
+    "rev-parse",
+    "--path-format=absolute",
+    "--git-common-dir",
+  ]);
+  let realGitRoot: string;
   try {
-    const realGitRoot = realpathSync(gitRoot.stdout);
+    realGitRoot = realpathSync(gitRoot.stdout);
     const realGitDirectory = gitDirectory.ok
       ? realpathSync(gitDirectory.stdout)
+      : null;
+    const realGitCommonDirectory = gitCommonDirectory.ok
+      ? realpathSync(gitCommonDirectory.stdout)
       : null;
     if (
       !isAuthorized(realGitRoot, allowedRoots) ||
       !realGitDirectory ||
-      !isAuthorized(realGitDirectory, allowedRoots)
+      !isAuthorized(realGitDirectory, allowedRoots) ||
+      !realGitCommonDirectory ||
+      !isAuthorized(realGitCommonDirectory, allowedRoots)
     ) {
       warnings.push(
-        `Git snapshot boundary escapes configured allowed roots for ${root}; snapshot inspection was skipped.`,
+        `Git worktree, metadata, or common-directory boundary escapes configured allowed roots for ${root}; snapshot inspection was skipped.`,
       );
       return null;
     }
@@ -325,7 +342,12 @@ function inspectGit(
   const branch = runGit(root, ["symbolic-ref", "--quiet", "--short", "HEAD"]);
   const status = runGit(
     root,
-    ["status", "--porcelain=v1", "--untracked-files=all"],
+    [
+      "status",
+      "--porcelain=v1",
+      "--untracked-files=all",
+      "--ignore-submodules=all",
+    ],
     filterOverrides.args,
   );
   if (!head.ok || !status.ok) {
@@ -337,7 +359,15 @@ function inspectGit(
     : [];
   const trackedDiff = runGitRaw(
     root,
-    ["diff", "--no-ext-diff", "--no-textconv", "--binary", "HEAD", "--"],
+    [
+      "diff",
+      "--no-ext-diff",
+      "--no-textconv",
+      "--ignore-submodules=all",
+      "--binary",
+      "HEAD",
+      "--",
+    ],
     filterOverrides.args,
   );
   const untracked = runGitRaw(
@@ -357,6 +387,40 @@ function inspectGit(
     contentBound = false;
   } else {
     for (const path of untrackedEntries) {
+      const absolutePath = join(realGitRoot, path);
+      let stat: ReturnType<typeof lstatSync>;
+      try {
+        stat = lstatSync(absolutePath);
+      } catch {
+        contentBound = false;
+        break;
+      }
+      if (stat.isSymbolicLink()) {
+        // Bind the link itself without following it across the allowlist boundary.
+        untrackedHashes.push(
+          `${path}\0symlink:${sha256(readlinkSync(absolutePath, "buffer"))}`,
+        );
+        continue;
+      }
+      if (!stat.isFile()) {
+        contentBound = false;
+        break;
+      }
+      try {
+        const canonicalPath = realpathSync(absolutePath);
+        if (
+          !isWithin(canonicalPath, realGitRoot) ||
+          !isAuthorized(canonicalPath, allowedRoots)
+        ) {
+          throw new Error(
+            "untracked path resolves outside authorized Git root",
+          );
+        }
+        assertSafeSource(canonicalPath);
+      } catch {
+        contentBound = false;
+        break;
+      }
       const hash = runGit(
         root,
         ["hash-object", "--no-filters", "--", path],
@@ -392,13 +456,12 @@ function inspectGit(
   };
 }
 
-function safeFilterConfigOverrides(root: string): {
+export function safeFilterConfigOverrides(root: string): {
   ok: boolean;
   args: string[];
 } {
   const configuredFilters = runGitRaw(root, [
     "config",
-    "--local",
     "--includes",
     "--name-only",
     "--null",
@@ -498,11 +561,14 @@ function safeGitEnvironment(): NodeJS.ProcessEnv {
   };
 }
 
-function loadAllowedRoots(errors: string[]): string[] {
+export function loadAllowedRoots(
+  errors: string[],
+  capability = "Workspace access",
+): string[] {
   const raw = process.env.ARBITER_FORGE_ALLOWED_ROOTS_JSON;
   if (!raw) {
     errors.push(
-      "Workspace inspection is disabled until ARBITER_FORGE_ALLOWED_ROOTS_JSON is configured. Pure forge and validation tools remain available.",
+      `${capability} is disabled until ARBITER_FORGE_ALLOWED_ROOTS_JSON is configured. Pure forge and validation tools remain available.`,
     );
     return [];
   }
@@ -528,7 +594,7 @@ function loadAllowedRoots(errors: string[]): string[] {
   }
 }
 
-function authorizePath(
+export function authorizePath(
   requestedPath: string,
   allowedRoots: string[],
   requireDirectory: boolean,
@@ -551,7 +617,7 @@ function isAuthorized(candidate: string, allowedRoots: string[]): boolean {
   return allowedRoots.some((root) => isWithin(candidate, root));
 }
 
-function isWithin(candidate: string, root: string): boolean {
+export function isWithin(candidate: string, root: string): boolean {
   const child = relative(root, candidate);
   return (
     child === "" ||
