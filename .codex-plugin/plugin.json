@@ -1,20 +1,20 @@
 {
   "name": "arbiter-forge",
-  "version": "0.2.0",
-  "description": "Forge deterministic multimodel implementation, documentation, and blind-check orchestration tasks.",
+  "version": "0.3.0",
+  "description": "Forge, validate, and persist runnable multimodel implementation, documentation, and blind-check task bundles.",
   "author": {
     "name": "shanja-glinka"
   },
   "skills": "./skills/",
   "interface": {
     "displayName": "Arbiter Forge",
-    "shortDescription": "Build multimodel arbiter tasks with auditable gates.",
-    "longDescription": "Arbiter Forge turns a normalized objective into a deterministic, self-contained orchestration prompt with role-oriented model/provider fallbacks for implementation, documentation synthesis, or a strict documentation-versus-code blind check.",
+    "shortDescription": "Build and save runnable multimodel arbiter tasks.",
+    "longDescription": "Arbiter Forge turns a normalized objective into a deterministic, self-contained orchestration prompt with role-oriented model/provider fallbacks, validates its provenance, and can persist it as an ignored repository-local task bundle with exact launch commands.",
     "developerName": "shanja-glinka",
     "category": "Productivity",
     "capabilities": ["MCP tools", "Skills"],
     "defaultPrompt": [
-      "Use Arbiter Forge to produce and validate the smallest sufficient hard-arbiter task for my objective."
+      "Use Arbiter Forge to produce, validate, and materialize the smallest sufficient hard-arbiter task for my objective, then give me its artifact links and launch commands."
     ]
   },
   "mcpServers": "./.mcp.json"

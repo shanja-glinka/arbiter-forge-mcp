@@ -1,7 +1,7 @@
 {
   "name": "arbiter-forge-mcp",
-  "version": "0.2.0",
-  "description": "Deterministic MCP prompt forge for multimodel hard-arbiter implementation, documentation, and blind-check tasks.",
+  "version": "0.3.0",
+  "description": "Deterministic MCP forge and persistent handoff for multimodel hard-arbiter tasks.",
   "private": true,
   "license": "UNLICENSED",
   "type": "module",

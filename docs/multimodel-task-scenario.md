@@ -12,8 +12,9 @@ flowchart LR
   D --> A["Sol root: normalize requirements and risks"]
   C --> A
   A --> F["forge_implementation_task"]
-  F --> V["validate_task"]
-  V --> W["Terra backend / configured Claude frontend"]
+  F --> M["materialize_task_bundle (recompile + validate + save)"]
+  M --> L["Host launch + observed task/session identity"]
+  L --> W["Terra backend / configured Claude frontend"]
   W --> T["Luna or Terra test runners"]
   T --> Q["Fresh Sol auditors"]
   Q --> X{"Material findings?"}
@@ -77,6 +78,8 @@ special lanes:
 ```json
 {
   "objective": "Implement a tenant-scoped GraphQL pricing editor with complete Playwright proof.",
+  "taskId": "tenant-pricing-editor",
+  "outputMode": "resumable_package",
   "repositories": [
     {
       "id": "application",
@@ -198,14 +201,49 @@ aliases and credentials differ by operator.
 - a `routingPlanHash` bound into the prompt invariant manifest;
 - warnings for an unavailable preference and a blocking error for a proven-exhausted required lane.
 
-The root calls `validate_task` with the exact original request, prompt, operation, and Forge hash.
-Manual prompt edits are structural-only; change the typed request and re-forge instead.
+For a prompt-only handoff, the root would call `validate_task` with the exact original request,
+prompt, operation, and Forge hash. This scenario asks for a saved executable task, so it avoids that
+extra round trip and calls `materialize_task_bundle` directly with the same request, operation,
+prompt SHA-256, and `targetRepositoryId: "application"`. The materializer performs the same
+deterministic recompile and embeds its validation result before writing.
 
-This ends the creation task. For minimum token use, launch a new clean Sol task with only the
-validated prompt. Do not forward the inspection transcript, analyst logs, MCP responses, or raw
-Forge JSON unless a field is required by the execution contract.
+Success writes and verifies:
+
+```text
+/work/application/.arbiter-forge/tasks/tenant-pricing-editor/<fingerprint-prefix>/
+├── task.md
+├── manifest.json
+├── README.md
+└── run.sh
+```
+
+The handoff must say **“Task bundle materialized, but not launched”** and include all of the
+following:
+
+- separate clickable absolute links for `task.md`, `manifest.json`, `README.md`, and `run.sh`;
+- absolute bundle root and target working directory;
+- materialization status plus prompt and per-file SHA-256 values;
+- recommended, non-interactive, and interactive commands;
+- the caveat that the ignored local cache survives reboot but not manual cleanup or
+  `git clean -fdx`.
+
+The recommended command uses the materializer-returned hashes as an out-of-band integrity anchor:
+
+```bash
+bash '/work/application/.arbiter-forge/tasks/tenant-pricing-editor/<fingerprint-prefix>/run.sh' \
+  '<run-sha256>' '<prompt-sha256>' '<manifest-sha256>'
+```
+
+For minimum token use, that launcher starts a new clean task with only `task.md`. Do not forward the
+inspection transcript, analyst logs, MCP responses, or raw Forge JSON unless a field is required by
+the execution contract.
 
 ## 6. Execution and route attestation
+
+Running a printed command is not by itself a proven `launched` transition. The host records the
+started Codex task/thread identity (or non-interactive process/session identity), target working
+directory, task hash, and start outcome. Only then may the lifecycle advance from `materialized` to
+`launched`; without that evidence the response remains a handoff, not an execution claim.
 
 Before every spawn, the root creates a route-ledger row:
 
@@ -234,6 +272,12 @@ not start.
 The Sol root reads distilled reports, routes corrections to the owning writer, invalidates stale
 evidence, and repeats only affected checks. It issues the final verdict only after all required
 audits pass on one current integrated snapshot.
+
+Parallel execution should normally stay within two or three active lanes. A shared worktree has one
+writer; additional writers require isolated worktrees and non-overlapping ownership. Parking a lane
+in prose is insufficient: it needs an owner, exact next action, and a time- or event-based resume
+condition. The proposed durable scheduler and recovery contract is specified in
+[ADR-0003](adr/0003-durable-multi-lane-execution.md); it is not implemented by package 0.3.0.
 
 ## Host without multiple models
 

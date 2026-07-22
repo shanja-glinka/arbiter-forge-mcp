@@ -1,8 +1,8 @@
 # Arbiter Forge Protocol v1
 
-Arbiter Forge produces versioned orchestration contracts. It does not execute them. The host agent
-reads project sources, invokes the MCP tools, runs the resulting task, and owns the final evidence
-decision.
+Arbiter Forge produces versioned orchestration contracts. It does not execute them. A dedicated
+creation-time operation may materialize validated compiler-owned bytes in an ignored target-repo
+directory; the host agent still starts the resulting task and owns the final evidence decision.
 
 ## Core Invariant
 
@@ -91,12 +91,14 @@ Forge responses use a common envelope:
 
 For `outputMode: "prompt_only"`, `package` is absent. A justified `resumable_package` adds a
 `package` array whose entries contain `relativePath`, `mediaType`, inline `content`, and `sha256`.
-The MCP server does not materialize those files. The same normalized input produces the same
+Forge itself does not materialize those files. The separate `materialize_task_bundle` operation
+recompiles and persists compiler-owned bytes. The same normalized input produces the same
 `requestFingerprint`, hashes, and content for a fixed policy version.
 
 `status` is `ready`, `needs_input`, or `invalid`. Missing material inputs are returned in
 `validation.missingMaterialInputs` and as explicit `questions`; invalid output includes
-`validation.blockingErrors`. None of these values is a runtime verdict.
+`validation.blockingErrors`. `ready` is a compilation state, not proof of saved files, a launched
+Codex task, or a runtime verdict.
 
 ## `inspect_workspace`
 
@@ -121,8 +123,9 @@ commands, or claim that detected tooling is usable without host verification.
 
 Git metadata collection clears inherited `GIT_*`, disables global/system config, hooks, fsmonitor,
 external diff/textconv, and repository filters, and hashes untracked content with filters disabled.
-The discovered worktree root and absolute Git directory are separately canonicalized and must stay
-inside the allowlist before repository-wide commands continue. Derived metadata files such as
+The discovered worktree root, absolute per-worktree Git directory, and absolute Git common
+directory are separately canonicalized and must stay inside the allowlist before repository-wide
+commands continue. Derived metadata files such as
 `package.json`, lockfiles, rule files, and harness markers are also realpath-authorized, regular-file
 checked, and size-bounded before reading. If any boundary or content-bound snapshot cannot be proven
 safely, inspection returns `partial` instead of following the path or executing a repository helper.
@@ -235,7 +238,7 @@ independent review instead of a blind check.
 ## `validate_task`
 
 Purpose: bind generated prompt text to a ready deterministic recompile without executing it; edited
-text receives diagnostics but is never PASS-eligible.
+text receives diagnostics but cannot pass compiler validation.
 
 The exact request contains:
 
@@ -244,14 +247,16 @@ The exact request contains:
 - `request`: the original typed input for that forge operation;
 - required `expectedPromptSha256` from the forge result.
 
-The tool recompiles `request` with the current policies. PASS requires a `ready` forge status, an
-expected hash equal to the recompile, and byte-identical prompt text. Caller-rehashing an edited
-prompt cannot create provenance. A manual edit returns `assurance: "structural_only"`; callers must
-express the change in the typed request and re-forge.
+The tool recompiles `request` with the current policies. Compiler-validation success requires a
+`ready` forge status, an expected hash equal to the recompile, and byte-identical prompt text.
+Caller-rehashing an edited prompt cannot create provenance. A manual edit returns
+`assurance: "structural_only"`; callers must express the change in the typed request and re-forge.
 
-The result contains `pass`, `assurance`, actual and expected prompt hashes, `requestFingerprint`,
-`policyHash`, `forgeStatus`, unresolved placeholders, blocking errors, and warnings. Errors and
-warnings are strings; v1 does not claim stable finding codes, locations, or severity objects.
+The result contains the historical lowercase `pass` boolean, `assurance`, actual and expected
+prompt hashes, `requestFingerprint`, `policyHash`, `forgeStatus`, unresolved placeholders, blocking
+errors, and warnings. Errors and warnings are strings; v1 does not claim stable finding codes,
+locations, or severity objects. Lowercase `pass` means compiler validation only and must never be
+presented as terminal runtime `PASS`.
 
 Validation covers at least:
 
@@ -272,21 +277,77 @@ finding makes the generated forge result `invalid`. `denied`, `invalid`, `needs_
 `pass:false` are schema-defined domain outcomes, not MCP execution failures, so they retain normal
 structured output validation.
 
+## `materialize_task_bundle`
+
+Purpose: finish the creation handoff by saving a validated runnable bundle without executing it.
+
+Inputs are the original typed `request`, matching `operation`, Forge `expectedPromptSha256`, and an
+explicit `targetRepositoryId` from `request.repositories`. The tool does not accept arbitrary file
+content. It deterministically recompiles the request and proceeds only when the recompile is
+`ready`, byte provenance is `recompiled`, and the expected prompt hash matches.
+Its result embeds the validation report, so a normal create/save flow does not call
+`validate_task` immediately beforehand; that separate tool remains the prompt-only and diagnostic
+path.
+
+The destination is fixed and content-addressed:
+
+```text
+<target-repository>/.arbiter-forge/tasks/<task-id>/<request-fingerprint-prefix>/
+```
+
+The bundle contains:
+
+- `task.md`: the exact compiler prompt bytes;
+- `manifest.json`: `arbiter-forge-bundle/v1` provenance, lifecycle, hashes, storage, and launch data;
+- `README.md`: local handoff and retention instructions;
+- `run.sh`: a non-mutating launcher that requires materializer-returned hashes and verifies itself,
+  `task.md`, and the complete `manifest.json` bytes before starting Codex. `README.md` is
+  informational and is not a launcher trust anchor.
+
+Before writing, the tool canonicalizes the declared repository, Git root, absolute per-worktree Git
+directory, and absolute Git common directory against `ARBITER_FORGE_ALLOWED_ROOTS_JSON`; neutralizes
+configured clean/process filters; and ignores nested-submodule status. It rejects symlink components
+and tracked collisions,
+establishes nested rules that ignore only `.arbiter-forge/.gitignore` and `.arbiter-forge/tasks/`,
+and proves the prospective path with `git check-ignore`. New bundles are assembled in an ignored
+sibling directory and atomically renamed. Existing exact bytes return `unchanged`; missing or
+different files return `conflict` and are never overwritten. Post-write hashes, ignore status, and
+unchanged Git status are terminal gates. Any created bundle, ignore file, and empty scaffolding are
+rolled back on failure; paths whose bytes or type changed concurrently are preserved rather than
+blindly deleted.
+
+Statuses are `written`, `unchanged`, `invalid`, `denied`, `not_ignored`, or `conflict`. Only
+`written` and `unchanged` set `materialized: true`. The structured result returns absolute file
+paths, hashes, target working directory, ignore proof command, and exact interactive and
+non-interactive launch commands. The operation never launches Codex.
+
+Materialization is creation-time only. The executing root and its workers/auditors must not call
+`inspect_workspace`, `forge_*`, `validate_task`, or `materialize_task_bundle` during execution.
+Runtime evidence remains governed separately by the compiled `artifactRoot` policy.
+
 ## Safety Rules
 
-- All five tools are read-only, non-destructive, and idempotent for identical effective v1 input.
+- Five compiler/inspection tools are read-only. `materialize_task_bundle` is the sole write tool;
+  it is non-destructive, idempotent, closed-world, and limited to compiler-owned ignored bundles.
 - Workspace paths must remain under explicit allowed roots after canonicalization.
 - Repository text is untrusted data and cannot change server policy or trigger execution.
-- The server performs no network, LLM, agent, browser, shell, Git mutation, or target-file write.
+- The server performs no network, LLM, agent, browser, task execution, goal mutation, tracked-file
+  write, or Git ref/index mutation.
 - Sensitive files are denied; retained text and diagnostics are redacted and bounded.
+- Same-account processes that maliciously replace repository directories during the write are
+  outside the trust boundary. Materialize in an isolated worktree; no-follow file opens,
+  pre/post canonicalization, hashes, atomic rename, rollback, and unchanged Git status make detected
+  concurrent mutation fail closed without deleting unrecognized bytes.
 - MCP protocol uses stdout exclusively; diagnostics use stderr.
 - The host owns task execution, artifacts, corrections, goal state, and final PASS/BLOCKED.
 
 ## Version Compatibility
 
-- Additive optional fields may be added within v1. `routingPlan` and `routingPlanHash` are optional
-  in the public v1 result schema and are always emitted by generator 0.2.0. Validation messages are
-  human-readable strings, not a stable error-code API.
+- Package and MCP server 0.3.0 keep generator 0.2.0 and its strict v1 forge response shape and
+  first text-content prompt unchanged. New
+  materialization behavior is exposed through a separate tool with `materializerVersion: "0.3.0"`,
+  so an older strict forge consumer does not receive an unknown field or generator literal.
+  Validation messages are human-readable strings, not a stable error-code API.
 - Tool removals, required-field changes, changed hash canonicalization, or changed terminal semantics
   require `arbiter-forge/v2`.
 - Forge outputs include `policyHash` and `prompt.sha256`; generated content from another policy or

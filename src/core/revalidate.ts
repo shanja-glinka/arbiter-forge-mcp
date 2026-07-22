@@ -25,7 +25,7 @@ export interface RevalidationResult {
   warnings: string[];
 }
 
-/** Recompile the typed source request and require byte identity before PASS. */
+/** Recompile the typed source request and require byte identity for compiler validation. */
 export function revalidateTaskPrompt(
   request: ValidateTaskRequest,
 ): RevalidationResult {
@@ -67,7 +67,7 @@ export function revalidateTaskPrompt(
   }
   if (request.prompt !== expected.prompt.text) {
     blockingErrors.push(
-      "Prompt bytes differ from the deterministic recompile; edited prompts cannot receive PASS. Re-forge the typed request.",
+      "Prompt bytes differ from the deterministic recompile; edited prompts cannot pass compiler validation. Re-forge the typed request.",
     );
   }
   if (expected.status !== "ready") {

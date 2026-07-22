@@ -1,7 +1,17 @@
 import { z } from "zod/v4";
 
 export const SCHEMA_VERSION = "arbiter-forge/v1" as const;
+export const PACKAGE_VERSION = "0.3.0" as const;
+export const MATERIALIZER_VERSION = "0.3.0" as const;
+// The compiler output remains byte/schema compatible with v0.2.0. The package
+// and materializer can evolve without pretending the deterministic generator changed.
 export const GENERATOR_VERSION = "0.2.0" as const;
+
+export const forgeOperationSchema = z.enum([
+  "implementation_task",
+  "documentation_task",
+  "blind_check_task",
+]);
 
 export const riskSignalSchema = z.enum([
   "browser_ui",
@@ -425,17 +435,40 @@ export const inspectWorkspaceRequestSchema = z.strictObject({
 export const validateTaskRequestSchema = z
   .strictObject({
     prompt: z.string().min(1).max(400_000),
-    operation: z.enum([
-      "implementation_task",
-      "documentation_task",
-      "blind_check_task",
-    ]),
+    operation: forgeOperationSchema,
     request: z.union([
       implementationRequestSchema,
       documentationRequestSchema,
       blindCheckRequestSchema,
     ]),
     expectedPromptSha256: z.string().regex(/^[a-f0-9]{64}$/u),
+  })
+  .superRefine((value, context) => {
+    const actualOperation =
+      "requirements" in value.request
+        ? "implementation_task"
+        : "deliverables" in value.request
+          ? "documentation_task"
+          : "blind_check_task";
+    if (value.operation !== actualOperation) {
+      context.addIssue({
+        code: "custom",
+        path: ["request"],
+        message: `request shape belongs to ${actualOperation}, not ${value.operation}`,
+      });
+    }
+  });
+
+export const materializeTaskRequestSchema = z
+  .strictObject({
+    operation: forgeOperationSchema,
+    request: z.union([
+      implementationRequestSchema,
+      documentationRequestSchema,
+      blindCheckRequestSchema,
+    ]),
+    expectedPromptSha256: z.string().regex(/^[a-f0-9]{64}$/u),
+    targetRepositoryId: stableIdSchema(80),
   })
   .superRefine((value, context) => {
     const actualOperation =
@@ -600,6 +633,54 @@ export const promptValidationResultSchema = z.strictObject({
   warnings: z.array(z.string()),
 });
 
+export const materializeTaskResultSchema = z.strictObject({
+  schemaVersion: z.literal(SCHEMA_VERSION),
+  generatorVersion: z.literal(GENERATOR_VERSION),
+  materializerVersion: z.literal(MATERIALIZER_VERSION),
+  status: z.enum([
+    "written",
+    "unchanged",
+    "invalid",
+    "denied",
+    "not_ignored",
+    "conflict",
+  ]),
+  materialized: z.boolean(),
+  taskId: z.string(),
+  targetRepositoryId: z.string(),
+  targetRoot: z.string().nullable(),
+  bundleRoot: z.string().nullable(),
+  validation: promptValidationResultSchema,
+  storage: z.strictObject({
+    relativeRoot: z.string().nullable(),
+    ignored: z.boolean(),
+    ignoreProofCommand: z.string().nullable(),
+  }),
+  files: z.array(
+    z.strictObject({
+      relativePath: z.string(),
+      absolutePath: z.string(),
+      mediaType: z.enum([
+        "text/markdown",
+        "application/json",
+        "text/x-shellscript",
+      ]),
+      sha256: sha256Schema,
+      executable: z.boolean(),
+    }),
+  ),
+  launch: z
+    .strictObject({
+      workingDirectory: z.string(),
+      recommendedCommand: z.string(),
+      nonInteractiveCommand: z.string(),
+      interactiveCommand: z.string(),
+    })
+    .nullable(),
+  errors: z.array(z.string()),
+  warnings: z.array(z.string()),
+});
+
 export type RiskSignal = z.infer<typeof riskSignalSchema>;
 export type RiskProfile = z.infer<typeof riskProfileSchema>;
 export type RepositoryRef = z.infer<typeof repositorySchema>;
@@ -617,6 +698,10 @@ export type ImplementationRequest = z.infer<typeof implementationRequestSchema>;
 export type DocumentationRequest = z.infer<typeof documentationRequestSchema>;
 export type BlindCheckRequest = z.infer<typeof blindCheckRequestSchema>;
 export type ValidateTaskRequest = z.infer<typeof validateTaskRequestSchema>;
+export type MaterializeTaskRequest = z.infer<
+  typeof materializeTaskRequestSchema
+>;
+export type MaterializeTaskResult = z.infer<typeof materializeTaskResultSchema>;
 export type ForgeResult = z.infer<typeof forgeResultSchema>;
 export type CompiledForgeResult = Omit<ForgeResult, "decisions"> & {
   decisions: ForgeResult["decisions"] & {

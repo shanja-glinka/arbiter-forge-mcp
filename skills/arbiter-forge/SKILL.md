@@ -1,6 +1,6 @@
 ---
 name: arbiter-forge
-description: Inspect repositories and forge or validate portable hard-arbiter prompts for implementation, documentation synthesis, and documentation-versus-code blind checks through the Arbiter Forge MCP. Use when Codex needs to turn a task or source package into an adaptive Compact, Standard, or Critical orchestration prompt with independent evidence, Playwright/GraphQL proof when applicable, model and goal fallbacks, correction loops, and strict terminal gates.
+description: Inspect repositories; forge, validate, and persist runnable hard-arbiter task bundles for implementation, documentation synthesis, and documentation-versus-code blind checks through the Arbiter Forge MCP. Use when Codex needs to turn a task or source package into an adaptive Compact, Standard, or Critical orchestration prompt with durable repo-local handoff, independent evidence, Playwright/GraphQL proof when applicable, model and goal fallbacks, correction loops, and strict terminal gates.
 ---
 
 # Arbiter Forge
@@ -12,9 +12,9 @@ the MCP as a prompt compiler, not as evidence that the generated task has alread
 
 If the current request already contains an Arbiter Forge invariant manifest and identifies itself
 as a compiled execution contract, enter **execution mode**. Do not call `inspect_workspace`, any
-`forge_*` tool, or `validate_task`; do not send subagents to Arbiter Forge. Follow the compiled
-contract directly and give workers only owner-scoped packets. The creation flow below applies only
-when producing or materially revising a task.
+`forge_*` tool, `validate_task`, or `materialize_task_bundle`; do not send subagents to Arbiter
+Forge. Follow the compiled contract directly and give workers only owner-scoped packets. The
+creation flow below applies only when producing or materially revising a task.
 
 ## Core flow
 
@@ -75,20 +75,48 @@ Use the exposed Arbiter Forge operations in this order:
    - `root_arbiter` may describe only the already-running `root_session`. Use
      `diversityMode: require` when an auditor must prove a different actual model/provider; use
      `prefer` for a quality preference that may degrade on a single-model host.
-4. **Validate** with `validate_task`.
+   - When the operator asks to **create/save a task**, set `outputMode: resumable_package` and include
+     the repository that will be the Codex working directory. A `ready` Forge result means only
+     **compiled**. It does not prove that any file or Codex task exists, and must never be described
+     as “created”, “saved”, or “launched”.
+4. **Validate** with `validate_task` when returning a prompt without saving it, or when the operator
+   explicitly asks for a separate diagnostic validation report.
    - Pass the exact Forge `prompt`, `operation`, original typed `request`, and
      `expectedPromptSha256` from the forge result.
-   - PASS requires that request to recompile to `ready` and the prompt to match the deterministic
-     recompile byte for byte. The result binds the prompt to `requestFingerprint` and `policyHash`.
-   - A manually edited prompt receives only `structural_only` diagnostics and cannot PASS. Express
+   - Compiler-validation success requires that request to recompile to `ready` and the prompt to
+     match the deterministic recompile byte for byte. The result binds the prompt to
+     `requestFingerprint` and `policyHash`; its lowercase `pass` field is not runtime `PASS`.
+   - A manually edited prompt receives only `structural_only` diagnostics and cannot pass compiler validation. Express
      the desired change in the typed request and re-forge. When Forge emits a package,
      `validate_task` validates its prompt text, not every companion file.
+   - Do not spend a second MCP round trip on `validate_task` immediately before materialization:
+     `materialize_task_bundle` performs the same deterministic recompile and returns the validation
+     result in its own response.
+5. **Materialize** with `materialize_task_bundle` instead of step 4 when the operator asked to
+   create, save, hand off, or later run the task.
+   - Pass the same exact typed request and operation, Forge `prompt.sha256`, and the explicit target
+     repository ID. Choose the only repository automatically; for multiple repositories use the
+     repository that unambiguously owns the execution workspace, and ask only when that choice is
+     materially ambiguous.
+   - The tool recompiles the request itself and writes only compiler-produced bytes. It stores the
+     bundle under `<target-repository>/.arbiter-forge/tasks/<task-id>/<fingerprint-prefix>/`, not in
+     operating-system `/tmp`. It creates a narrow nested ignore policy, proves every task file is
+     ignored, writes atomically, verifies hashes, neutralizes Git filters, refuses out-of-allowlist
+     worktree and common Git metadata, symlink escapes, and tracked/conflicting files, rolls back
+     created scaffolding on failure, and never starts Codex.
+   - Only `status: written` or `status: unchanged` with `materialized: true` proves a saved bundle.
+     `invalid`, `denied`, `not_ignored`, or `conflict` means no successful handoff; report the exact
+     error and do not claim creation.
+   - The repo-local bundle survives reboot but remains an ignored local cache: manual deletion or
+     `git clean -fdx` can remove it. It is not a committed archive.
 
-These four steps are the **creation phase**. After validation, hand the compiled prompt to a clean
-execution task. The executing root, workers, and auditors must not call Arbiter Forge MCP for
-instructions or repeat `inspect`, `forge`, or `validate` during correction loops. A material change
-to the operator's typed request creates a new task; ordinary runtime findings stay in the existing
-ledger.
+Steps 4 and 5 are alternate terminal handoffs: validate-only or validate-and-materialize. Together
+with inspection, framing, and Forge they form the **creation phase**. After materialization, hand
+the saved `task.md` to a
+clean execution task. The executing root, workers, and auditors must not call Arbiter Forge MCP for
+instructions or repeat `inspect`, `forge`, `validate`, or `materialize` during correction loops. A
+material change to the operator's typed request creates a new bundle; ordinary runtime findings
+stay in the existing ledger.
 
 Use the exact schemas exposed by the `arbiter-forge` MCP server. If an operation is unavailable,
 report the missing capability instead of claiming it ran. A manual prompt may be returned only as
@@ -143,10 +171,24 @@ material unresolved decision after in-scope remedies are exhausted.
 
 ## Return the result
 
-When the user asks only for a task, return the validated ready-to-run prompt and a short decision
-summary: workflow, risk profile, required audits, model-routing status, goal mode, and validation
-warnings. Do not execute the task unless the user asked for execution.
+When the user asks only for a prompt or specification, return the validated prompt and state
+explicitly: **“Compiled and validated, but not saved and not launched.”** Include the workflow,
+risk profile, required audits, routing status, goal mode, and validation warnings.
 
-For a resumable package, return only the files emitted by Forge and their hashes. Do not manufacture
-empty ledgers or worker packets. Keep run reports, logs, screenshots, traces, videos, and raw
-payloads outside Git, normally under `/tmp/arbiter-forge/<task-id>/<run-id>/`.
+When the user asks to create or save a task, materialize it before answering. Start the handoff with
+**“Task bundle materialized, but not launched.”** Always include:
+
+- clickable absolute links to `task.md`, `manifest.json`, `README.md`, and `run.sh`;
+- the absolute bundle root and target working directory;
+- prompt SHA-256 and materialization status (`written` or `unchanged`);
+- the exact `recommendedCommand`, plus interactive/non-interactive alternatives;
+- the local-cache retention caveat.
+
+Do not say that a Codex task/thread was launched unless the host actually started one and returned a
+real thread/session identity. Do not execute the task unless the user explicitly asked for
+execution.
+
+Do not manufacture empty ledgers or worker packets. Task bundles belong in the materialized
+repository-local `.arbiter-forge/tasks/` store. Runtime reports, logs, screenshots, traces, videos,
+and raw payloads remain a separate evidence class and follow the compiled prompt's `artifactRoot`
+policy.

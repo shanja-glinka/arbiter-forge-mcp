@@ -1,6 +1,6 @@
 # ADR-0001: Hybrid Codex Plugin and Local MCP
 
-- Status: Accepted
+- Status: Accepted, amended by ADR-0002
 - Date: 2026-07-15
 - Decision owners: Arbiter Forge maintainers
 
@@ -23,19 +23,21 @@ Arbiter Forge is a hybrid product with three explicit responsibility boundaries:
 1. The Codex plugin skill is the cognitive and UX layer. It selects the applicable workflow,
    reads repository instructions and canonical sources, normalizes task-specific constraints, and
    explains when to use goals, independent agents, Playwright, or a blind check.
-2. The local STDIO MCP server is a stateless, deterministic engine. It inspects allowed workspace
-   metadata, renders versioned prompts or packages, and validates their structural and safety
-   invariants.
+2. The local STDIO MCP server is a deterministic engine. It inspects allowed workspace metadata,
+   renders versioned prompts or packages, validates their structural and safety invariants, and—per
+   ADR-0002—may materialize only validated compiler-owned task bytes in an ignored local store.
 3. The host Codex agent performs semantic reasoning and execution. It owns clarification,
    subagent spawning, goal-tool calls, file changes, tests, browser operation, evidence review, and
    the final verdict.
 
-The MCP server returns generated content inline. It does not write into target repositories,
-execute generated tasks, or persist run state.
+Forge and validation return generated content inline. The narrow materialization exception is
+defined by ADR-0002. The server does not execute generated tasks or persist runtime state.
 
 ## Public Tool Surface
 
-The v1 MCP API contains exactly five tools:
+The v1 MCP API originally contained five tools; package 0.3.0 adds the creation-time
+`materialize_task_bundle` operation defined by ADR-0002 while retaining generator 0.2.0's strict
+forge response contract.
 
 | Tool                        | Responsibility                                                                                                                                                   |
 | --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -44,10 +46,12 @@ The v1 MCP API contains exactly five tools:
 | `forge_documentation_task`  | Render a documentation-authoring task that independently studies intent and implementation before an arbiter approves a normalized specification for the writer. |
 | `forge_blind_check_task`    | Render a true D1/D2/D3 documentation-versus-implementation audit with isolated inputs and explicit mismatch classes.                                             |
 | `validate_task`             | Recompile the original typed request and validate only a ready, byte-identical generated prompt; edited text is diagnostics-only.                                |
+| `materialize_task_bundle`   | Recompile and save only validated compiler-owned bytes under an ignored, content-addressed repository-local path; never launch the task.                         |
 
-All tools are read-only, non-destructive, idempotent for the same versioned input, and
-closed-world. The three `forge_*` tools share one internal renderer and validation core; separate
-tool names keep their schemas and user intent precise.
+All tools are closed-world. The original five remain read-only. `materialize_task_bundle` is a
+non-destructive, idempotent write exception limited to ignored compiler-owned task bytes. The three
+`forge_*` tools share one internal renderer and validation core; separate tool names keep their
+schemas and user intent precise.
 
 ## Blind Documentation Workflows
 
@@ -106,8 +110,8 @@ The server follows these constraints:
 - Git access restricted to allowlisted read-only subcommands invoked without a shell, inherited
   `GIT_*`, global/system config, hooks, fsmonitor, filters, external diff, and textconv disabled;
 - protocol output written only to stdout and sanitized diagnostics only to stderr;
-- no LLM calls, agent scheduler, command runner, browser runner, goal mutation, Git mutation, or
-  target-workspace writes.
+- no LLM calls, agent scheduler, task execution, browser runner, goal mutation, Git ref/index
+  mutation, tracked-file writes, or target-workspace writes outside ADR-0002's ignored task store.
 
 ## Role-oriented model routing
 
@@ -124,8 +128,10 @@ prefer a named operator custom agent for Claude, but the Forge never assumes tha
 model, or adapter exists. Pre-Forge task framing and on-demand debugging are not unconditional lanes
 in an implementation execution plan.
 
-Generator 0.2.0 exposes additive optional v1 response fields for the compiled plan, per-candidate
-availability derived only from caller-supplied capabilities, and a deterministic `routingPlanHash`.
+Generator 0.2.0 exposes the compiled plan, per-candidate availability derived only from
+caller-supplied capabilities, and a deterministic `routingPlanHash`. Package 0.3.0 does not add a
+forge-envelope handoff field because older strict v1 consumers would reject it; the separate
+materializer owns its new result schema and version.
 It does not expose an `actualRoute`; only the
 executing host can attest that after launch. A complete host inventory can prove a candidate
 unavailable. Direct Codex child routes require both spawn isolation and model selection support;
@@ -139,11 +145,11 @@ observed compatible custom provider/gateway or an external adapter with its own 
 
 ## Compilation and execution boundary
 
-Inspection, framing, Forge, and deterministic validation happen in the creation task. The compiled
-prompt is self-contained and may be handed to a new clean execution task so Sol does not inherit
-the creation transcript. The executing root and its workers/auditors never query Arbiter Forge for
-instructions. Runtime findings stay in the root ledger; only an operator-approved change to the
-typed source request creates a new compilation.
+Inspection, framing, Forge, deterministic validation, and optional materialization happen in the
+creation task. The compiled prompt is self-contained and may be handed to a new clean execution
+task so Sol does not inherit the creation transcript. The executing root and its workers/auditors
+never query Arbiter Forge for instructions. Runtime findings stay in the root ledger; only an
+operator-approved change to the typed source request creates a new compilation.
 
 ## Plugin and MCP Registration
 

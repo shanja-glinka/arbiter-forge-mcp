@@ -5,6 +5,7 @@ import {
   mkdtempSync,
   mkdirSync,
   realpathSync,
+  renameSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -165,9 +166,31 @@ describe("workspace inspection boundary", () => {
     expect(result.status).toBe("partial");
     expect(result.workspaces[0]?.git).toBeNull();
     expect(result.warnings.join("\n")).toContain(
-      "Git snapshot boundary escapes configured allowed roots",
+      "boundary escapes configured allowed roots",
     );
     expect(result.allowedRoots).toEqual([realpathSync(allowedChild)]);
+  });
+
+  it("does not inspect a worktree whose Git common directory escapes the allowlist", () => {
+    const { root, commonDirectory } = createExternalCommonDirectoryFixture(
+      "arbiter-forge-inspect-common-dir-",
+    );
+    process.env.ARBITER_FORGE_ALLOWED_ROOTS_JSON = JSON.stringify([root]);
+
+    const result = inspectWorkspace({ workspaceRoots: [root] });
+
+    expect(
+      spawnSync(
+        "git",
+        ["rev-parse", "--path-format=absolute", "--git-common-dir"],
+        { cwd: root, encoding: "utf8", shell: false },
+      ).stdout.trim(),
+    ).toBe(realpathSync(commonDirectory));
+    expect(result.status).toBe("partial");
+    expect(result.workspaces[0]?.git).toBeNull();
+    expect(result.warnings.join("\n")).toContain(
+      "common-directory boundary escapes configured allowed roots",
+    );
   });
 
   it("does not follow workspace metadata symlinks outside the allowlist", () => {
@@ -240,7 +263,7 @@ describe("workspace inspection boundary", () => {
 
     const first = inspectWorkspace({ workspaceRoots: [root] });
     const firstSnapshot = first.workspaces[0]?.git;
-    expect(first.status).toBe("ready");
+    expect(first.status, JSON.stringify(first)).toBe("ready");
     expect(firstSnapshot).toMatchObject({ dirty: true, contentBound: true });
     expect(existsSync(marker)).toBe(false);
 
@@ -252,6 +275,87 @@ describe("workspace inspection boundary", () => {
       firstSnapshot?.dirtyManifestHash,
     );
     expect(existsSync(marker)).toBe(false);
+  }, 15_000);
+
+  it("does not execute clean/process filters from nested submodules", () => {
+    const root = createGitFixture("arbiter-forge-inspect-superproject-");
+    const submoduleSource = createGitFixture(
+      "arbiter-forge-inspect-submodule-source-",
+    );
+    writeFileSync(
+      join(submoduleSource, ".gitattributes"),
+      "filtered.txt filter=evil\n",
+    );
+    writeFileSync(join(submoduleSource, "filtered.txt"), "base\n");
+    runFixtureGit(submoduleSource, ["add", ".gitattributes", "filtered.txt"]);
+    runFixtureGit(submoduleSource, ["commit", "-q", "-m", "filter fixture"]);
+    runFixtureGit(root, [
+      "-c",
+      "protocol.file.allow=always",
+      "submodule",
+      "add",
+      "-q",
+      submoduleSource,
+      "nested",
+    ]);
+    runFixtureGit(root, ["add", ".gitmodules", "nested"]);
+    runFixtureGit(root, ["commit", "-q", "-m", "add nested submodule"]);
+
+    const marker = join(root, "nested-filter-executed");
+    const helper = join(root, "nested", "evil-filter.sh");
+    writeFileSync(
+      helper,
+      `#!/bin/sh\ntouch ${JSON.stringify(marker)}\nexit 1\n`,
+    );
+    chmodSync(helper, 0o700);
+    runFixtureGit(join(root, "nested"), [
+      "config",
+      "filter.evil.clean",
+      helper,
+    ]);
+    runFixtureGit(join(root, "nested"), [
+      "config",
+      "filter.evil.process",
+      helper,
+    ]);
+    runFixtureGit(join(root, "nested"), [
+      "config",
+      "filter.evil.required",
+      "true",
+    ]);
+    writeFileSync(join(root, "nested", "filtered.txt"), "changed\n");
+    process.env.ARBITER_FORGE_ALLOWED_ROOTS_JSON = JSON.stringify([root]);
+
+    const result = inspectWorkspace({ workspaceRoots: [root] });
+
+    expect(result.status).toBe("ready");
+    expect(result.workspaces[0]?.git).toMatchObject({ contentBound: true });
+    expect(existsSync(marker)).toBe(false);
+  }, 20_000);
+
+  it("hashes an untracked symlink itself without following its outside target", () => {
+    const root = createGitFixture("arbiter-forge-untracked-symlink-");
+    const outside = mkdtempSync(
+      join(tmpdir(), "arbiter-forge-untracked-symlink-outside-"),
+    );
+    const outsideFile = join(outside, "outside.txt");
+    writeFileSync(outsideFile, "first outside value\n");
+    symlinkSync(outsideFile, join(root, "outside-link"));
+    process.env.ARBITER_FORGE_ALLOWED_ROOTS_JSON = JSON.stringify([root]);
+
+    const first = inspectWorkspace({ workspaceRoots: [root] });
+    writeFileSync(outsideFile, "different outside value\n");
+    const second = inspectWorkspace({ workspaceRoots: [root] });
+
+    expect(first.status, JSON.stringify(first)).toBe("ready");
+    expect(first.workspaces[0]?.git).toMatchObject({
+      dirty: true,
+      untrackedEntries: 1,
+      contentBound: true,
+    });
+    expect(second.workspaces[0]?.git?.dirtyManifestHash).toBe(
+      first.workspaces[0]?.git?.dirtyManifestHash,
+    );
   });
 
   it("detects a monorepo marker without recursive code scanning", () => {
@@ -281,4 +385,43 @@ function runFixtureGit(root: string, args: string[]): void {
       `git ${args.join(" ")} failed: ${result.stderr || result.stdout}`,
     );
   }
+}
+
+function createGitFixture(prefix: string): string {
+  const root = mkdtempSync(join(tmpdir(), prefix));
+  writeFileSync(join(root, "tracked.txt"), "base\n");
+  runFixtureGit(root, ["init", "-q"]);
+  runFixtureGit(root, ["config", "user.email", "audit@example.invalid"]);
+  runFixtureGit(root, ["config", "user.name", "Audit"]);
+  runFixtureGit(root, ["add", "tracked.txt"]);
+  runFixtureGit(root, ["commit", "-q", "-m", "base"]);
+  return realpathSync(root);
+}
+
+function createExternalCommonDirectoryFixture(prefix: string): {
+  root: string;
+  commonDirectory: string;
+} {
+  const fixtureRoot = mkdtempSync(join(tmpdir(), prefix));
+  const root = join(fixtureRoot, "allowed");
+  mkdirSync(root);
+  writeFileSync(join(root, "tracked.txt"), "base\n");
+  runFixtureGit(root, ["init", "-q"]);
+  runFixtureGit(root, ["config", "user.email", "audit@example.invalid"]);
+  runFixtureGit(root, ["config", "user.name", "Audit"]);
+  runFixtureGit(root, ["add", "tracked.txt"]);
+  runFixtureGit(root, ["commit", "-q", "-m", "base"]);
+
+  const commonDirectory = join(fixtureRoot, "outside.git");
+  renameSync(join(root, ".git"), commonDirectory);
+  mkdirSync(join(root, ".git"));
+  renameSync(join(commonDirectory, "HEAD"), join(root, ".git", "HEAD"));
+  renameSync(join(commonDirectory, "index"), join(root, ".git", "index"));
+  writeFileSync(join(root, ".git", "commondir"), `${commonDirectory}\n`);
+  writeFileSync(join(root, ".git", "gitdir"), `${join(root, ".git")}\n`);
+
+  return {
+    root: realpathSync(root),
+    commonDirectory: realpathSync(commonDirectory),
+  };
 }

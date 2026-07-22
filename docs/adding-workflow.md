@@ -17,9 +17,11 @@ execution.
      Reuse an existing logical role when ownership and evidence contracts match; do not add a role
      for every file type.
 5. Add structural invariants in `src/core/validate.ts` and route the operation through deterministic
-   revalidation in `src/core/revalidate.ts`. User-facing PASS requires a ready byte-identical
-   recompile of the original typed request.
-6. Register a thin read-only MCP tool in `src/server.ts`. It must not execute the generated task.
+   revalidation in `src/core/revalidate.ts`. Compiler-validation success requires a ready,
+   byte-identical recompile of the original typed request; only execution may issue runtime `PASS`.
+6. Register a thin read-only compiler MCP tool in `src/server.ts`. It must not execute the generated
+   task. Reuse the shared `materialize_task_bundle` handoff; workflow-specific write tools are not
+   allowed.
 7. Add or update one canonical policy file under `skills/arbiter-forge/references/` and route it from
    `SKILL.md`.
 8. Add deterministic, risk-profile, adversarial, and bundled STDIO integration tests.
@@ -34,7 +36,8 @@ execution.
 - no LLM or Codex API calls from the MCP server;
 - no agent spawning or model assignment claims;
 - no goal lifecycle calls;
-- no target-repository writes or Git mutation;
+- no target-repository writes except the shared, compiler-owned, ignored bundle materializer from
+  ADR-0002; no Git ref/index mutation or tracked-file write;
 - no arbitrary command framework;
 - no network listener or telemetry;
 - no source content returned by workspace inspection;
